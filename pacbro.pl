@@ -19,7 +19,7 @@ my $tmux_exe = exe_path('tmux') // die("Please install tmux\n");
 my $fzfx = exe_path('fzf') // die("Please install fzf\n");
 my $yayx = exe_path('yay');
 my $progname = ($0 =~ m{(?:^|/)([^/]+?)(?:\.\w+)?$}s) ? $1 : die("Bad program name: $0\n");
-my $work_dir = "/tmp/$progname";
+my $work_dir = "/tmp/$progname-$ENV{USER}";
 my $sess_code = "$progname-$$";
 my $tumx_cmd = "$tmux_exe -L $sess_code";
 my $log_fname = "$work_dir/app.log"; # global log

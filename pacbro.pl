@@ -82,7 +82,6 @@ my $tmux_key_list = [
 
 my $pac_hist_nav_keys = []; # key, dir, label, foo
 
-# TODO: remember selected filters
 my $app_menu_list = [
 	{ code => "LAYOUT", label => 'Detail View/Layout', key => 'M-v', popper => \&menu_list_popper, handler => \&tmux_layout, multi => 0, list => $layout_list },
 	{ code => "REPOFILTER", label => 'Select Repos', key => 'M-r', popper => \&menu_list_popper, handler => \&repo_filter, multi => 1 },
@@ -93,7 +92,6 @@ my $app_menu_list = [
 	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 },
 	{ code => "KEYMAP", label => 'Keyboard Shortcuts', key => 'M-k', popper => \&menu_keymap },
 	{ code => "ABOUT", label => 'Help / About', key => 'M-?', popper => \&menu_about },
-	# about/help
 ];
 
 my $app_menu_map = {};
@@ -240,7 +238,7 @@ sub pipcmd_TMUXUP {
 	my ($tmux, $detail) = @_;
 
 	$tmux->{comm_h} //= do {#
-		my $control_output = "$path_pfx.control"; # "/dev/null"
+		my $control_output = "/dev/null"; # "$path_pfx.control";
 		open(my $tmux_comm_h, '|-', "$tumx_cmd -C attach -t $sess_code >$control_output") or report("Could not launch control mode", 1);
 		$tmux_comm_h->autoflush();
 		$tmux->{comm} = sub {
@@ -260,7 +258,6 @@ sub pipcmd_TMUXUP {
 		#$tmux->{comm}->(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
 		#report(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
 	}
-	# $tmux->{comm}->(qq`set-hook -t botr pane-focus-in "run 'echo FOCUS bot >> $tmux->{cmd_in}'"`);
 
 	pac_db_load_full($tmux) if !$tmux->{db};
 	pac_list_load($tmux);
@@ -292,8 +289,7 @@ sub tmux_next_msg {
 	while ($tmux->{cmd_in}) {
 		if (my $msgs_text = run_blocking(1, sub { read_file($tmux->{cmd_in}, 1) })) {
 			my @lines = ($msgs_text =~ m/\V+/gs);
-			scalar(@lines) || next;
-			$tmux->{from_tmux} = \@lines;
+			$tmux->{from_tmux} = scalar(@lines) ? \@lines : next;
 			return tmux_next_msg($tmux);
 		}
 		waitpid($tmux->{tpid}, WNOHANG) && report("tmux exited, bye", 0); # tmux exited
@@ -440,13 +436,13 @@ sub pac_db_load_full {
 
 	report(timest(Time::HiRes::time()) . " will load packages now");
 
-	my $pac_list_exe = $use_aur ? "yay -Sl" : "pacman -Sl";
+	my $pac_list_exe = $use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl";
 	open(my $pach, '-|', "$pac_list_exe | sort -k 2.1") or die("Couldn't load package info\n $!");
 	while (<$pach>) {
 		my ($repo_nm, $pac_nm) = m{^(\S++) (\S++)}s;
 		if ($pac_map->{$pac_nm // next}) {
 			$repo_nm eq 'aur' && next; # exclude AUR duplicates
-			index($pac_map->{repo_nm}, '-testing') != -1 && next; # testing repos enabled - use them
+			index($repo_nm, '-testing') != -1 && next; # testing repos enabled - use them
 		}
 
 		my $repo = ($repo_map->{$repo_nm} //= do {
@@ -499,7 +495,8 @@ sub pac_db_load_full {
 
 	{ # Load Sync DB
 		local $/ = "\n\n"; # gulp large text blocks
-		my $aur_cmd = (@$pacs_aur) ? "; yay -Si ".join(' ', @$pacs_aur) : '';
+		#my $aur_cmd = (@$pacs_aur) ? "; yay -Si ".join(' ', @$pacs_aur) : '';
+		my $aur_cmd = '';
 		open(my $pacsh, '-|', "pacman -Si $aur_cmd") or die("Couldn't load package info\n $!");
 		while (my $info_text = <$pacsh>) {
 			my $pac_props = pac_props_parse($info_text);
@@ -554,11 +551,15 @@ sub pac_list_get {
 		my $list_text = $pac_info->{$list_code} // next;
 		if ($list_text eq 'None') {
 			$list_text = '';
-		} elsif ($list_code eq 'Optional Deps') {
-			$list_text =~ s/:[^\n]*//gs;
-			$list_text =~ s/\[[Ii]nstalled\]//gs;
+		} else {
+			if ($list_code eq 'Optional Deps') {
+				$list_text =~ s/:[^\n]*//gs;
+				$list_text =~ s/\[[Ii]nstalled\]//gs;
+			}
+			my @pac_list = ($list_text =~ m/(\S+)/gs);
+			$list_text = join("\n", sort @pac_list);
 		}
-		$pac_lists->{$list_code} = $list_text =~ s/\s+/\n/gsr;
+		$pac_lists->{$list_code} = $list_text;
 	}
 	return $pac->{lists} = $pac_lists;
 }
@@ -589,12 +590,84 @@ sub pac_add_sync_info {
 	$pac->{info_text} = ($pac->{info_text} // '') . "--- Sync DB info ---\n" . $info_text;
 }
 
+sub pac_info_aur { #
+	my ($tmux, $pac_nm) = @_;
+	my $pac_info_txt = `curl -sL 'https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=$pac_nm'`;
+	my $pac_json = json_parse($pac_info_txt, 0);
+}
+
+sub json_parse {
+	my ($json_text, $idx) = @_;
+	my ($hier, $obj, $pname, $pval) = ([]);
+	my $consts = ($::{json_consts} //= {true => 1, false => '', null => undef});
+	while ($json_text =~ m/\s* (?: ([\{\}\[\]\:\,]) | " ((?:[^"\\]+|\\.)*) " | (true|false|null|\d+) ) \s*/gsx) {
+		if (my $cmd_ch = $1) { # new struc
+			if ($cmd_ch eq ',') { # next element in map or array
+				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch"};
+				$pval || return {err => "bad JSON at $-[0]: $cmd_ch, incomplete item"};
+				$pval = undef;
+				$pname = undef;
+				# implement or ignore
+			} elsif ($cmd_ch eq ':') {
+				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
+				ref $obj eq 'HASH' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
+				defined($pname) || return {err => "bad JSON at $-[0]: $cmd_ch, prop name not defined"};
+				$pval && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname value already defined"};
+			} elsif ($cmd_ch eq '{' || $cmd_ch eq '[') {
+				(defined($pname) || defined($pval)) && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname has no value"};
+				my $new_obj = $cmd_ch eq '{' ? {} : [];
+				if (defined($obj)) { # last object exists
+					if (ref $obj eq 'HASH') { # prev object is HASH
+						defined($pname) || return {err => "bad JSON at $-[0]: $cmd_ch, unknown prop name"};
+						$obj->{$pname} = $new_obj;
+						$pname = undef;
+					} else {
+						push(@$obj, $new_obj);
+					}
+					push(@$hier, $obj);
+				}
+				$obj = $new_obj;
+			} elsif ($cmd_ch eq '}') {
+				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
+				ref $obj eq 'HASH' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
+				defined($pname) && !$pval && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname has no value"};
+				$obj = pop(@$hier);
+				$pval = undef;
+				$pname = undef;
+			} elsif ($cmd_ch eq ']') {
+				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
+				ref $obj eq 'ARRAY' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
+				defined($pname) && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname in array"};
+				$obj = pop(@$hier);
+				$pval = undef;
+			}
+		} else {
+			# defined($lvalue) && return {err => "bad JSON at $-[0]: $cmd_ch, prev value was unclaimed"};
+			defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
+			my $val = $3 && exists $consts->{$3} ? $consts->{$3} : $2 // $3;
+			if (ref $obj eq 'HASH') {
+				defined($pval) && return {err => "bad JSON at $-[0]: $cmd_ch, value already defined"};
+				if ($pval = defined($pname)) {
+					$obj->{$pname} = $val;
+				} else {
+					$pname = $val;
+				}
+			} elsif (ref $obj eq 'ARRAY') {
+				$pval = 1;
+				push(@$obj, $val);
+			}
+		}
+	}
+	scalar(@$hier) && return {err => "bad JSON, object not complete"};
+	return $obj;
+}
+
 # POPUP logic
 
 sub tmux_popup_display {
 	my ($tmux, $item_list, $feedback_cmd, $title, $multi, $chosen) = @_;
 	my $fzf_chosen = '';
-	if ($chosen && @$chosen) {
+	if ($chosen && @$chosen) { # mark list entries selected previously
 		my $item_idx = 1;
 		my $item_idx_map = {map {$_ => $item_idx++} @$item_list};
 		my @chosen_idxs = map {$item_idx_map->{$_}} @$chosen;
@@ -763,7 +836,7 @@ sub menu_keymap {
 
 $key_list_text
 TEXT
-	system(qq`$tumx_cmd display-popup -h 100\% -w 76 -E "$less_cmd $keymap_file" &`);
+	system(qq`$tumx_cmd display-popup -h 100\% -w 100\% -E "$less_cmd $keymap_file" &`);
 }
 
 sub keybindings_text {

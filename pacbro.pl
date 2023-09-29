@@ -3,11 +3,6 @@
 # Arch package browser
 #
 
-#
-# TODO: implement package management: refresh sync database, update, uninstall, etc
-# TODO: auto-load AUR packages with info = "Hit <Enter> to load information"
-#
-
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case);
@@ -17,7 +12,7 @@ use POSIX;
 (`tty` =~ m{^/dev/} && $ENV{TERM}) || die("Must run in terminal\n");
 my $tmux_exe = exe_path('tmux') // die("Please install tmux\n");
 my $fzfx = exe_path('fzf') // die("Please install fzf\n");
-my $yayx = exe_path('yay');
+# my $yayx = exe_path('yay');
 my $progname = ($0 =~ m{(?:^|/)([^/]+?)(?:\.\w+)?$}s) ? $1 : die("Bad program name: $0\n");
 my $work_dir = "/tmp/$progname-$ENV{USER}";
 my $sess_code = "$progname-$$";
@@ -30,7 +25,7 @@ Getopt::Long::GetOptions(
 	'help|h' => \(my $show_help),
 );
 
-die("Install 'yay' to use AUR feature\n") if $use_aur && !$yayx;
+# die("Install 'yay' to use AUR feature\n") if $use_aur && !$yayx;
 
 my $shutdown_hooks = [];
 my $layout_list = [
@@ -353,7 +348,7 @@ sub pipcmd_PACNAV {
 sub package_sel {
 	my ($tmux, $pac) = @_;
 
-	pac_fill_in_info($pac);
+	pac_fill_in_info($tmux, $pac);
 
 	if (!($_ = $tmux->{pac}) || $_->{name} ne $pac->{name}) { # if package is different
 		write_file("$tmux->{pans}->{info}->{file}", $pac->{info_text} // '');
@@ -565,12 +560,14 @@ sub pac_list_get {
 }
 
 sub pac_fill_in_info { # not installed, in AUR
-	my ($pac) = @_;
-	if (!$pac->{info}) {
-		my $pac_list_exe = $pac->{repo_nm} eq 'aur' ? "yay -Si -a" : "pacman -Si";
-		#die(`$pac_list_exe $pac->{name}`);
-		my $info_text = `$pac_list_exe $pac->{name}`;
-		pac_add_sync_info($pac, $info_text, undef);
+	my ($tmux, $pac) = @_;
+	if (!$pac->{info} || !$pac->{info}->{'Repository'}) {
+		if ($pac->{repo_nm} eq 'aur') {
+			pac_add_aur_info($tmux, $pac);
+			#pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
+		} else {
+			pac_add_sync_info($pac, ''.`pacman -Si '$pac->{name}'`, $pac->{info});
+		}
 	}
 }
 
@@ -590,76 +587,125 @@ sub pac_add_sync_info {
 	$pac->{info_text} = ($pac->{info_text} // '') . "--- Sync DB info ---\n" . $info_text;
 }
 
-sub pac_info_aur { #
-	my ($tmux, $pac_nm) = @_;
-	my $pac_info_txt = `curl -sL 'https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=$pac_nm'`;
-	my $pac_json = json_parse($pac_info_txt, 0);
-}
+sub pac_add_aur_info { #
+	my ($tmux, $pac) = @_;
+	$pac->{info}->{Votes} && return; # already filed in
 
-sub json_parse {
-	my ($json_text, $idx) = @_;
-	my ($hier, $obj, $pname, $pval) = ([]);
-	my $consts = ($::{json_consts} //= {true => 1, false => '', null => undef});
-	while ($json_text =~ m/\s* (?: ([\{\}\[\]\:\,]) | " ((?:[^"\\]+|\\.)*) " | (true|false|null|\d+) ) \s*/gsx) {
-		if (my $cmd_ch = $1) { # new struc
-			if ($cmd_ch eq ',') { # next element in map or array
-				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch"};
-				$pval || return {err => "bad JSON at $-[0]: $cmd_ch, incomplete item"};
-				$pval = undef;
-				$pname = undef;
-				# implement or ignore
-			} elsif ($cmd_ch eq ':') {
-				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
-				ref $obj eq 'HASH' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
-				defined($pname) || return {err => "bad JSON at $-[0]: $cmd_ch, prop name not defined"};
-				$pval && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname value already defined"};
-			} elsif ($cmd_ch eq '{' || $cmd_ch eq '[') {
-				(defined($pname) || defined($pval)) && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname has no value"};
-				my $new_obj = $cmd_ch eq '{' ? {} : [];
-				if (defined($obj)) { # last object exists
-					if (ref $obj eq 'HASH') { # prev object is HASH
-						defined($pname) || return {err => "bad JSON at $-[0]: $cmd_ch, unknown prop name"};
-						$obj->{$pname} = $new_obj;
-						$pname = undef;
-					} else {
-						push(@$obj, $new_obj);
-					}
-					push(@$hier, $obj);
-				}
-				$obj = $new_obj;
-			} elsif ($cmd_ch eq '}') {
-				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
-				ref $obj eq 'HASH' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
-				defined($pname) && !$pval && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname has no value"};
-				$obj = pop(@$hier);
-				$pval = undef;
-				$pname = undef;
-			} elsif ($cmd_ch eq ']') {
-				defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
-				ref $obj eq 'ARRAY' || return {err => "bad JSON at $-[0]: $cmd_ch, object not hash"};
-				defined($pname) && return {err => "bad JSON at $-[0]: $cmd_ch, prop $pname in array"};
-				$obj = pop(@$hier);
-				$pval = undef;
+	my $aur_props = ($::{aur_props} //= [
+		['Repository'], ['Name'], ['Version'], ['Description'],
+		['URL'], ['License', 'Licenses'], ['Keywords'], # ['Groups'],
+		['Provides'], ['Depends', 'Depends On'], ['OptDepends', 'Optional Deps'],
+		['MakeDepends', 'Make Deps'], ['CheckDepends', 'Check Deps'], ['Conflicts', 'Conflicts With'],
+		['Replaces'], ['AUR URL'],
+		['Submitter'], ['Maintainer'], ['CoMaintainers', 'Co-Maintainers'],
+		['FirstSubmitted', 'First Submitted'],
+		['LastModified', 'Last Modified'],
+		['NumVotes', 'Votes'], ['Popularity'], ['OutOfDate', 'Out-of-date']
+	]);
+	my $prop_len = ($::{aur_prop_len} //= (sort {$b <=> $a} map {length($_->[1] // $_->[0])} @$aur_props)[0] + 1);
+
+	my $pac_info_txt = `curl -sL 'https://aur.archlinux.org/rpc/?v=5&type=info&arg[]=$pac->{name}'`;
+	my $pac_obj = json_parse_obj($pac_info_txt);
+
+	$pac_obj->{err} && do { report("Failed to get '$pac->{name}' info: $pac_obj->{msg}"); return; };
+	$pac_obj = $pac_obj->{res}->{results}->[0];
+	$pac_obj->{Repository} = 'aur';
+	$pac_obj->{'AUR URL'} = "https://aur.archlinux.org/packages/$pac->{name}";
+
+	my ($info, $info_text) = ({}, '');
+
+	for my $prop_name (@$aur_props) {
+		my ($pname_aur, $pname_std) = ($prop_name->[0], $prop_name->[1] // $prop_name->[0]);
+		if (defined(my $prop_val = ($pac_obj->{$pname_aur}))) {
+			if (ref $prop_val eq 'ARRAY') {
+				$prop_val = join('  ', @$prop_val);
+			} elsif ($prop_val ne '' && index('FirstSubmitted|LastModified', $pname_aur) > -1) {
+				$prop_val = POSIX::strftime('%Y-%m-%d %H:%M:%S UTC', gmtime(int($prop_val)));
 			}
-		} else {
-			# defined($lvalue) && return {err => "bad JSON at $-[0]: $cmd_ch, prev value was unclaimed"};
-			defined($obj) || return {err => "bad JSON at $-[0]: $cmd_ch, object not defined"};
-			my $val = $3 && exists $consts->{$3} ? $consts->{$3} : $2 // $3;
-			if (ref $obj eq 'HASH') {
-				defined($pval) && return {err => "bad JSON at $-[0]: $cmd_ch, value already defined"};
-				if ($pval = defined($pname)) {
-					$obj->{$pname} = $val;
-				} else {
-					$pname = $val;
-				}
-			} elsif (ref $obj eq 'ARRAY') {
-				$pval = 1;
-				push(@$obj, $val);
+			if ($prop_val ne '') {
+				$info->{$pname_std} = $prop_val;
+				$info_text .= substr($pname_std.' 'x$prop_len, 0, $prop_len)." : $prop_val\n";
 			}
 		}
 	}
-	scalar(@$hier) && return {err => "bad JSON, object not complete"};
-	return $obj;
+
+	pac_add_sync_info($pac, $info_text, $info);
+}
+
+# JSON
+
+sub json_parse_obj {
+	my ($json_text) = @_;
+	my ($hier, $ppos, $obj, $pname, $pval, $objn) = ([], 0);
+	my $err = sub { # compose error object from a message & JSON RegEx
+		{err => $_[0], pos => $-[0], token => ($_=$1//$2//$3), msg => $_[0].': '.($-[0] // '-1').': '.$_}
+	};
+	$json_text =~ m/^\s*([\{\[])/s || return $err->('root must be an object'); # shortcut execution to reduce in-loop checks
+	my $consts = ($::{json_parse_consts} //= {true => 1, false => '', null => undef});
+	while ($json_text =~ m/\s* (?: ([\,\:\{\}\[\]]) | "( [^"\\]*+ (?:\\.[^"\\]*+)* )" | (null|-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|true|false))/gsx) {
+		$ppos != $-[0] && return $err->("inconsecutive match");
+		$ppos = $+[0];
+		if (my $cmd_ch = $1) { # lexical characters: , : [ ] { }
+			if ($cmd_ch eq ',') { # next element in map or array
+				$pval || return $err->("incomplete item, missing value");
+				$pname = $pval = undef;
+			} elsif ($cmd_ch eq ':') { # key-value separator
+				defined($pname) || return $err->("prop name not defined");
+				defined($pval) && return $err->("unexpected colon");
+				$pval = 0;
+			} elsif ($cmd_ch eq '{' || $cmd_ch eq '[') { # start of object or array
+				$objn = $cmd_ch eq '{' ? {} : [];
+				if (defined($obj)) { # last object exists
+					if (ref $obj eq 'HASH') { # prev object is HASH
+						defined($pname) || return $err->("unknown prop name");
+						$obj->{$pname} = $objn;
+					} else {
+						defined($pval) && return $err->("unexpected start of obj");
+						push(@$obj, $objn);
+					}
+					push(@$hier, $obj);
+				}
+				$obj = $objn;
+				$pname = $pval = undef;
+			} elsif ($cmd_ch eq '}') {
+				ref $obj eq 'HASH' || return $err->("HASH object is expected");
+				defined($pname) && !$pval && return $err->("prop $pname has no value");
+				$obj = pop(@$hier) //
+					return substr($json_text, $+[0]) =~ m/^\s*$/s ? {res => $obj} : $err->("text after JSON end");
+				$pname = undef;
+				$pval = 1;
+			} elsif ($cmd_ch eq ']') {
+				ref $obj eq 'ARRAY' || return $err->("wrong object type, expected ARRAY");
+				$obj = pop(@$hier) //
+					return substr($json_text, $+[0]) =~ m/^\s*$/s ? {res => $obj} : $err->("text after JSON end");
+				$pname = undef;
+				$pval = 1;
+			}
+		} else { # regular value
+			$pval && return $err->("value was already read");
+
+			my $val = defined($2) ?
+				(index($2, "\\") == -1 ? $2 : $2 =~ s{\\(?:(["/\\bfnrt])|u([0-9a-fA-F]{4}))}{
+						$1 ? $1 =~ tr|"/\\bfnrt|"/\\\b\f\n\r\t|r : chr(hex '0x'.$2)
+					}gerx # JSON excaping rules: https://www.json.org/json-en.html
+				) :
+				(exists $consts->{$3} ? $consts->{$3} : $3);
+
+			if (ref $obj eq 'HASH') {
+				if (defined($pname)) {
+					defined($pval) || return $err->("name and value must be separated");
+					$obj->{$pname} = $val;
+					$pval = 1;
+				} else {
+					$pname = $val;
+				}
+			} else {
+				push(@$obj, $val);
+				$pval = 1;
+			}
+		}
+	}
+	return $err->("JSON ended prematurely");
 }
 
 # POPUP logic
@@ -994,8 +1040,7 @@ OPTIONS
 
     --aur
         Include AUR packages. Package loading and navigation are
-        slower. NOTE. "yay" needs to be installed in order to use
-        this feature.
+        slower as the information is fetched via web lookups
 
     --help | -h
         help! I need somebody!
@@ -1006,7 +1051,8 @@ ABOUT
     If can be filtered by either package name typed into the
     search box on the top of the list, of with one of canned
     filters described below. The list is assembled with the help
-    of "pacman" and "yay" if executed with the "--aur" option.
+    of "pacman"; AUR web API is used to get package information
+    from AUR repo if launched with the "--aur" option.
 
     The top panel displays one of the following:
     * package information fetched with pacman -Qi|-Si
@@ -1041,12 +1087,11 @@ DEPENDENCIES
     * pacman: reads package information
     * bash: readline based regex filter input
     * coreutils: shell scripting glue
-    * yay: needed when AUR feature is enabled via '--aur'
 
 AUR
 
-    For AUR packages to be loaded, "yay" must be installed and
-    "--aur" argument passed to this program.
+    For AUR packages to be loaded, "--aur" argument passed to this
+    program.
 
     It is impractical to load details of all packages in AUR,
     there are just too many of them. This means search by package

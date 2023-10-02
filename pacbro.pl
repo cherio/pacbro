@@ -1049,7 +1049,7 @@ ABOUT
 
     The main list on the left displays the loaded list of packages.
     If can be filtered by either package name typed into the
-    search box on the top of the list, of with one of canned
+    search box on the top of the list, or with one of canned
     filters described below. The list is assembled with the help
     of "pacman"; AUR web API is used to get package information
     from AUR repo if launched with the "--aur" option.
@@ -1059,7 +1059,7 @@ ABOUT
     * selected package file contents or type
 
     The bottom panels display:
-    * related package lists
+    * related package lists: dependencies, dependants, conflicts etc
     * list of files installed from the package
     The contents of these panels can be chosen via main menu or
     key bindings

@@ -1,7 +1,7 @@
 SCREENSHOTS
 
-https://user-images.githubusercontent.com/2200569/271861058-c84e8230-eab3-422d-b9f7-6ca43e1d2acf.png
-https://user-images.githubusercontent.com/2200569/271861059-738f8450-bf49-4d15-a532-e9a92d37d418.png
+![pacbro-deps](https://github.com/cherio/pacbro/assets/2200569/c84e8230-eab3-422d-b9f7-6ca43e1d2acf)
+![pacbro-files](https://github.com/cherio/pacbro/assets/2200569/738f8450-bf49-4d15-a532-e9a92d37d418)
 
 SYNOPSIS
 

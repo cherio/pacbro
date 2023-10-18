@@ -169,11 +169,12 @@ sub tmux_start {
 		my $main_file = $tmux->{pans}->{main}->{file};
 		my $sel_action = "execute-silent(echo PACNAV {} >> $tmux->{cmd_in})";
 		my $binds = "--bind enter:'$sel_action' --bind double-click:'$sel_action'";
-		$binds .= " --bind focus:'$sel_action'" if !$use_aur; # do not auto-load package info
+		$binds .= " --bind left-click:'$sel_action'";
+		# $binds .= " --bind focus:'$sel_action'" if !$use_aur; # do not auto-load package info
 		$binds .= " --bind 'ctrl-alt-r:reload(cat $main_file)'";
 		$binds .= " --bind 'load:first'";
 		$binds .= " --bind 'start:unbind(ctrl-c,ctrl-g,ctrl-q,esc)'"; # do not allow exiting keys
-		my $pane_fzf = "cat $main_file 2>/dev/null | $fzfx --cycle $binds";
+		my $pane_fzf = "cat $main_file 2>/dev/null | $fzfx --cycle -e $binds";
 		my $main_cmd = "echo PANREADY main \\\$TMUX_PANE >> $cmd_in; while : ; do $pane_fzf; done";
 
 		exec("$tumx_cmd " .
@@ -186,7 +187,7 @@ sub tmux_start {
 			"set -g focus-events on" . ' \; ' .
 			qq`new-session -s $sess_code -n main "$main_cmd"` . ' \; ' .
 			qq`split-window -h -l 66\% "$info_cmd"` . ' \; ' .
-			qq`split-window -v ${\( cmd_arg(fzf_pane_cmd($tmux, 'botl')) )}` . ' \; ' .
+			qq`split-window -v ${\( cmd_arg(fzf_pane_cmd($tmux, 'botl', '--prompt=""')) )}` . ' \; ' .
 			" >/dev/null 2>>'$log_fname' ; " .
 			# in case tmux is killed, send QUIT to the main process and run cleanup just in case
 			# "[ -p '$cmd_in' ] && echo QUIT >> '$cmd_in'"
@@ -204,7 +205,7 @@ sub tmux_start {
 }
 
 sub fzf_pane_cmd {
-	my ($tmux, $pane_code) = @_;
+	my ($tmux, $pane_code, $fzf_args) = @_;
 	my $file = $tmux->{pans}->{$pane_code}->{file};
 	my $tit_file = "$file.title";
 	my $sel_action = "execute-silent(echo PACNAV {} >> $tmux->{cmd_in})";
@@ -215,7 +216,8 @@ sub fzf_pane_cmd {
 	$binds .= " --bind 'start:reload(cat ${\(cmd_arg($file))})'";
 	$binds .= " --bind 'start:transform-query(cat ${\(cmd_arg($tit_file))})'";
 	$binds .= " --bind 'load:first'";
-	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info $binds";
+	$binds .= " --bind 'bspace:ignore,left:ignore,home:ignore'";
+	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info $binds ".($fzf_args // '');
 	return "echo PANREADY $pane_code \$TMUX_PANE >> '$tmux->{cmd_in}'; while : ; do $pane_fzf; done";
 }
 
@@ -252,7 +254,7 @@ sub pipcmd_TMUXUP {
 		$tmux->{comm}->(qq`bind-key -n '$key' run 'echo "KEYPRESS $key" >> $tmux->{cmd_in}'`);
 	}
 
-	$tmux->{comm}->(qq`set-hook -w window-resized "run 'echo WINRESZ >> $tmux->{cmd_in}'"`);
+	#$tmux->{comm}->(qq`set-hook -w window-resized "run 'echo WINRESZ >> $tmux->{cmd_in}'"`);
 	for my $pan (@$tmux_pan_list) {
 		#$tmux->{comm}->(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
 		#report(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
@@ -329,7 +331,7 @@ sub pipcmd_PACNAV {
 	$pac_nm && $pac_nm =~ m{^/} && # is a simple file
 		return file_sel($tmux, $tmux->{pac_file_sel} = $pac_nm);
 
-	$pac_nm = $pac_nm =~ m/^(\S+)/ ? $1 : return tmux_status_notify($tmux, "Bad package spec: $pac_nm");
+	$pac_nm = $pac_nm =~ m/^([^\s\<\>\=]+)/ ? $1 : return tmux_status_notify($tmux, "Bad package spec: $pac_nm");
 
 	my $pac = $tmux->{db}->{pac_map}->{$pac_nm} //
 		return tmux_status_notify($tmux, "Package not found: $pac_nm");
@@ -786,8 +788,8 @@ sub tmux_layout_render {
 		write_file("$tmux->{pans}->{botl}->{file}.title", "[ Package Files ]");
 		$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-t'");
 
-		write_file("$tmux->{pans}->{botr}->{file}", "");
-		write_file("$tmux->{pans}->{botr}->{file}.title", "");
+		#write_file("$tmux->{pans}->{botr}->{file}", "");
+		#write_file("$tmux->{pans}->{botr}->{file}.title", "");
 		if ($tmux->{pans}->{botr}->{id}) {
 			$tmux->{comm}->("kill-pane -t $tmux->{pans}->{botr}->{id}");
 			$tmux->{pans}->{botr}->{id} = undef;
@@ -802,7 +804,7 @@ sub tmux_layout_render {
 			$tmux->{comm}->("send-keys -t $botr_id 'C-M-t'");
 			$tmux->{comm}->("resize-pane -t $botr_id -x 33\%");
 		} else {
-			my $shell_cmd = cmd_arg(fzf_pane_cmd($tmux, 'botr'));
+			my $shell_cmd = cmd_arg(fzf_pane_cmd($tmux, 'botr', '--prompt=""'));
 			$tmux->{comm}->(qq`split-window -h -l 50\% -t $tmux->{pans}->{botl}->{id} "$shell_cmd"`);
 		}
 	}

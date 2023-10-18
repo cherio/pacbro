@@ -35,8 +35,10 @@ ABOUT
     * selected package file contents or type
 
     The bottom panels display:
-    * related package lists: dependencies, dependants, conflicts etc
-    * list of files installed from the package
+    * related package lists: dependencies, dependants, conflicts etc;
+      package navigation within those lists is supported.
+    * list of files installed from the package; file preview is
+      supported
     The contents of these panels can be chosen via main menu or
     key bindings
 
@@ -90,9 +92,9 @@ KEYBINDINGS
     Ctrl+Down	Focus pane 🠟
     Ctrl+Right	Focus pane 🠞
     Alt+v	Detail View/Layout
-    Alt+r	Select Repos
-    Alt+i	Installed Status Filter
-    Alt+o	Outdated Status Filter
+    Alt+r	Repo filter
+    Alt+i	Installed status filter
+    Alt+o	Outdated status filter
     Alt+f	Search filenames
     Alt+d	Search package details
     Alt+m	Main Menu

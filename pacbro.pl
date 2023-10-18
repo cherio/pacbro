@@ -29,28 +29,28 @@ Getopt::Long::GetOptions(
 
 my $shutdown_hooks = [];
 my $layout_list = [
-	{ code => '1', label => 'Package Files', short => 'Files' },
-	{ code => '2', short => 'DepOn/ReqBy', lists => ['Depends On', 'Required By'] },
-	{ code => '3', short => 'Opt Dep/For', lists => ['Optional Deps', 'Optional For'] },
-	{ code => '4', short => 'Make/Check', lists => ['Make Deps', 'Check Deps'] },
-	{ code => '5', short => 'Prov/Confl', lists => ['Provides', 'Conflicts With'] },
-	{ code => '6', short => 'Prov/Repl', lists => ['Provides', 'Replaces'] },
+	{ code => '1', short => 'Files', list_names => ['Package Files'] },
+	{ code => '2', short => 'DepOn/ReqBy', list_names => ['Depends On', 'Required By'] },
+	{ code => '3', short => 'Opt Dep/For', list_names => ['Optional Deps', 'Optional For'] },
+	{ code => '4', short => 'Make/Check', list_names => ['Make Deps', 'Check Deps'] },
+	{ code => '5', short => 'Prov/Confl', list_names => ['Provides', 'Conflicts With'] },
+	{ code => '6', short => 'Prov/Repl', list_names => ['Provides', 'Replaces'] },
 ];
 
 for my $layout_item (@$layout_list) {
-	$layout_item->{label} //= join(' / ', @{$layout_item->{lists}});
+	$layout_item->{label} //= join(' / ', @{$layout_item->{list_names}});
 }
 
 my $pac_inst_states = [
-	{ code => 'N', label => 'Not Installed', short => 'Not Inst' },
-	{ code => 'E', label => 'Explicitly Installed', short => 'Expl' },
-	{ code => 'I', label => 'Installed as Dependency', short => 'As Dep' }
+	{ code => 'E', label => 'Explicitly Installed', short => 'explicit' },
+	{ code => 'I', label => 'Installed as Dependency', short => 'as dep' },
+	{ code => 'N', label => 'Not Installed', short => 'not inst' }
 ];
 
 my $outdated_states = [
 	{ code => '', label => 'Do not filter', short => '*' },
-	{ code => 'O', label => 'Outdated', short => 'Old' },
-	{ code => 'U', label => 'Up-to-date', short => 'New' },
+	{ code => 'O', label => 'Installed, Outdated', short => 'outdated' },
+	{ code => 'U', label => 'Installed, Up-to-date', short => 'up-to-date' },
 ];
 
 my $cmd_map = { # commands sent back to pacbro from tmux windows, fzf, less, etc
@@ -187,7 +187,7 @@ sub tmux_start {
 			"set -g focus-events on" . ' \; ' .
 			qq`new-session -s $sess_code -n main "$main_cmd"` . ' \; ' .
 			qq`split-window -h -l 66\% "$info_cmd"` . ' \; ' .
-			qq`split-window -v ${\( cmd_arg(fzf_pane_cmd($tmux, 'botl', '--prompt=""')) )}` . ' \; ' .
+			qq`split-window -v ${\( cmd_arg(fzf_pane_cmd($tmux, 'botl')) )}` . ' \; ' .
 			" >/dev/null 2>>'$log_fname' ; " .
 			# in case tmux is killed, send QUIT to the main process and run cleanup just in case
 			# "[ -p '$cmd_in' ] && echo QUIT >> '$cmd_in'"
@@ -215,9 +215,9 @@ sub fzf_pane_cmd {
 	$binds .= " --bind 'start:unbind(ctrl-c,ctrl-g,ctrl-q,esc)'"; # do not allow exiting keys
 	$binds .= " --bind 'start:reload(cat ${\(cmd_arg($file))})'";
 	$binds .= " --bind 'start:transform-query(cat ${\(cmd_arg($tit_file))})'";
+	$binds .= " --bind 'change:transform-query(cat ${\(cmd_arg($tit_file))})'";
 	$binds .= " --bind 'load:first'";
-	$binds .= " --bind 'bspace:ignore,left:ignore,home:ignore'";
-	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info $binds ".($fzf_args // '');
+	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info --prompt='' $binds ".($fzf_args // '');
 	return "echo PANREADY $pane_code \$TMUX_PANE >> '$tmux->{cmd_in}'; while : ; do $pane_fzf; done";
 }
 
@@ -361,19 +361,16 @@ sub package_sel {
 		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} R");
 	}
 	$tmux->{pac} = $pac;
+	my $pac_det_lists = pac_list_get($pac); # { list_name => multiline_text }
 
 	my $layout = $tmux->{layout}; # depending on the layout
-	if ($layout->{code} eq '1') {
-		write_file("$tmux->{pans}->{botl}->{file}", $pac->{file_list} // '');
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-r'");
-	} else {
-		my $pac_deps = pac_list_get($pac); # $pac->{lists} // {};
-		my $list_field_names = $layout->{lists};
+	my $list_names = $layout->{list_names};
 
-		write_file("$tmux->{pans}->{botl}->{file}", $pac_deps->{$list_field_names->[0]} // '');
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-r'");
+	write_file("$tmux->{pans}->{botl}->{file}", $pac_det_lists->{$list_names->[0]} // '');
+	$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-r'");
 
-		write_file("$tmux->{pans}->{botr}->{file}", $pac_deps->{$list_field_names->[1]} // '');
+	if ($list_names->[1]) {
+		write_file("$tmux->{pans}->{botr}->{file}", $pac_det_lists->{$list_names->[1]} // '');
 		$tmux->{pans}->{botr}->{id} &&
 			$tmux->{comm}->("send-keys -t $tmux->{pans}->{botr}->{id} 'C-M-r'");
 	}
@@ -462,7 +459,7 @@ sub pac_db_load_full {
 
 	report(timest(Time::HiRes::time()) . " loaded the -Sl list");
 	#report("DATED stats: ".(join(' ', %$debug_stat)));
-	# name, inst [EIN], repo_nm, repo, ver_inst, ver_repo, dated, info{}, lists{}, info_text, file_list
+	# name, inst [EIN], repo_nm, repo, ver_inst, ver_repo, dated, info{}, pk_lists{}, info_text, file_list
 
 	my $pacs_foreign = [];
 	my $pacs_aur = [];
@@ -541,13 +538,13 @@ sub pac_props_parse {
 
 sub pac_list_get {
 	my ($pac) = @_;
-	($_ = $pac->{lists}) && return $_;
+	($_ = $pac->{pk_lists}) && return $_;
 
 	my $list_prop_list = ($::{pac_list_prop_list} //=
 		['Depends On', 'Required By', 'Optional Deps', 'Optional For', 'Make Deps', 'Check Deps', 'Provides', 'Conflicts With', 'Replaces']);
 
 	my $pac_info = $pac->{info};
-	my $pac_lists = {};
+	my $pk_lists = {};
 
 	for my $list_code (@$list_prop_list) {
 		my $list_text = $pac_info->{$list_code} // next;
@@ -561,9 +558,12 @@ sub pac_list_get {
 			my @pac_list = ($list_text =~ m/(\S+)/gs);
 			$list_text = join("\n", sort @pac_list);
 		}
-		$pac_lists->{$list_code} = $list_text;
+		$pk_lists->{$list_code} = $list_text;
 	}
-	return $pac->{lists} = $pac_lists;
+
+	$pk_lists->{'Package Files'} = $pac->{file_list}; # add file list
+
+	return $pac->{pk_lists} = $pk_lists;
 }
 
 sub pac_fill_in_info { # not installed, in AUR
@@ -584,7 +584,7 @@ sub pac_add_sync_info {
 	$pac->{ver_repo} = $sync_props->{'Version'};
 	$pac->{dated} = defined($pac->{ver_inst}) ? ($pac->{ver_inst} eq $pac->{ver_repo} ? 'U' : 'O') : '';
 	if (my $pac_info = $pac->{info}) { # installed, add sync DB info
-		while (my ($prop_name, $prop_val) = each %$sync_props) { # add "lists" from sync db
+		while (my ($prop_name, $prop_val) = each %$sync_props) {
 			$pac_info->{$prop_name} //= $prop_val;
 		}
 	} else { # not installed
@@ -719,6 +719,7 @@ sub json_parse_obj {
 
 sub tmux_popup_display {
 	my ($tmux, $item_list, $feedback_cmd, $title, $multi, $chosen) = @_;
+	$title = " [ $title ]"; # █
 	my $fzf_chosen = '';
 	if ($chosen && @$chosen) { # mark list entries selected previously
 		my $item_idx = 1;
@@ -734,7 +735,12 @@ sub tmux_popup_display {
 	my $pop_height = '-h '.((($_ = scalar(@$item_list)) < 19 ? $_ : 19) + 3);
 	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\t]+)/g)'";
 	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\\\v+/\t/gsr)'";
-	my $fzf_pipe = qq`$fzfx $multi --marker='# ' --pointer='█' --no-info --disabled -q '$title' --bind alt-q:abort,q:abort $fzf_chosen`;
+
+	my $binds = "--bind alt-q:abort,q:abort";
+	$binds .= " --bind 'change:change-query($title)+beginning-of-line'"; #
+	$binds .= " --bind 'start:beginning-of-line'";
+
+	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --no-info --disabled -q '$title' $binds $fzf_chosen`;
 	system(qq`$tumx_cmd display-popup -E $pop_height "$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}" &`);
 }
 
@@ -780,34 +786,31 @@ sub tmux_layout {
 
 sub tmux_layout_render {
 	my ($tmux) = @_;
-	my $layout = $tmux->{layout}; # { code => '2', short => 'Dep/Req', lists => ['Depends On', 'Required By'] },
+	my $layout = $tmux->{layout}; # { code => '2', short => 'Dep/Req', list_names => ['Depends On', 'Required By'] },
 	tmux_status_bar_update($tmux);
 	$tmux->{comm}->(qq`resize-pane -t $tmux->{pans}->{main}->{id} -x 34\%`);
 	$tmux->{comm}->(qq`resize-pane -t $tmux->{pans}->{info}->{id} -y 50\%`);
-	if ($layout->{code} eq '1') {
-		write_file("$tmux->{pans}->{botl}->{file}.title", "[ Package Files ]");
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-t'");
 
-		#write_file("$tmux->{pans}->{botr}->{file}", "");
-		#write_file("$tmux->{pans}->{botr}->{file}.title", "");
-		if ($tmux->{pans}->{botr}->{id}) {
+	my $list_field_names = $layout->{list_names};
+	write_file("$tmux->{pans}->{botl}->{file}.title", "[ $list_field_names->[0] ]");
+	$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-t'"); # refresh title
+
+	if ($list_field_names->[1]) { # needs second bottom pane on the right
+		write_file("$tmux->{pans}->{botr}->{file}.title", "[ $list_field_names->[1] ]");
+		if (my $botr_id = $tmux->{pans}->{botr}->{id}) { # right bottom pane exists
+			$tmux->{comm}->("send-keys -t $botr_id 'C-M-t'"); # refresh title
+			$tmux->{comm}->("resize-pane -t $botr_id -x 33\%");
+		} else { # create right bottom pane
+			my $shell_cmd = cmd_arg(fzf_pane_cmd($tmux, 'botr'));
+			$tmux->{comm}->(qq`split-window -h -l 50\% -t $tmux->{pans}->{botl}->{id} "$shell_cmd"`);
+		}
+	} else {
+		if ($tmux->{pans}->{botr}->{id}) { # remove tmux "botr" pane
 			$tmux->{comm}->("kill-pane -t $tmux->{pans}->{botr}->{id}");
 			$tmux->{pans}->{botr}->{id} = undef;
 		}
-	} else {
-		my $list_field_names = $layout->{lists};
-		write_file("$tmux->{pans}->{botl}->{file}.title", "[ $list_field_names->[0] ]");
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-t'");
-
-		write_file("$tmux->{pans}->{botr}->{file}.title", "[ $list_field_names->[1] ]");
-		if (my $botr_id = $tmux->{pans}->{botr}->{id}) {
-			$tmux->{comm}->("send-keys -t $botr_id 'C-M-t'");
-			$tmux->{comm}->("resize-pane -t $botr_id -x 33\%");
-		} else {
-			my $shell_cmd = cmd_arg(fzf_pane_cmd($tmux, 'botr', '--prompt=""'));
-			$tmux->{comm}->(qq`split-window -h -l 50\% -t $tmux->{pans}->{botl}->{id} "$shell_cmd"`);
-		}
 	}
+
 	$tmux->{comm}->("select-pane -t $tmux->{pans}->{main}->{id}");
 	($_ = $tmux->{pac}) && package_sel($tmux, $_);
 }
@@ -815,9 +818,6 @@ sub tmux_layout_render {
 sub pipcmd_PANFOCUS { # possibly unnecessary
 	my ($tmux, $pane_code) = @_;
 	report("pipcmd_PANFOCUS: $pane_code");
-	if ($tmux->{layout}->{code} eq '1' && $pane_code eq 'botr') {
-		$tmux->{comm}->("select-pane -t $tmux->{pans}->{botl}->{id}");
-	}
 }
 
 # MENU handlers, filters
@@ -848,7 +848,7 @@ sub inst_filter {
 	$item_list = [] if scalar(@$item_list) == scalar(@$pac_inst_states); # ALL - no filter
 
 	my $code_by_lab = ($::{pac_inst_cd_by_lab} //= {map {$_->{label} => $_->{code}} @$pac_inst_states});
-	my $codes = join('', grep { $_ } map {$code_by_lab->{$_}} @$item_list);
+	my $codes = join('', sort grep { $_ } map {$code_by_lab->{$_}} @$item_list);
 	$codes eq ($tmux->{flt}->{inst} // '') && return; # not changed
 	$tmux->{flt}->{inst} = $codes;
 
@@ -965,7 +965,7 @@ sub tmux_status_bar_update {
 	}
 
 	my $bar_text = join('', map {"[$_]"} @bar_items);
-	$bar_text = $bar_text ? cmd_arg("Filt: " . $bar_text) : "''";
+	$bar_text = $bar_text ? cmd_arg($bar_text) : "''";
 	$tmux->{comm}->("set window-status-current-format " . $bar_text);
 
 	$tmux->{comm}->("set status-right " .

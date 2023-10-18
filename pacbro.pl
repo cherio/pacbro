@@ -53,7 +53,7 @@ my $outdated_states = [
 	{ code => 'U', label => 'Up-to-date', short => 'New' },
 ];
 
-my $cmd_map = {
+my $cmd_map = { # commands sent back to pacbro from tmux windows, fzf, less, etc
 	QUIT => sub { exit(0) },
 	PANREADY => \&pipcmd_PANREADY,
 	TMUXUP => \&pipcmd_TMUXUP,
@@ -62,7 +62,7 @@ my $cmd_map = {
 	WINRESZ => \&tmux_layout_render,
 	PANFOCUS => \&pipcmd_PANFOCUS,
 	PACFLT => \&pipcmd_PACFLT,
-};
+}; # each handler gets 2 args: global tmux object & command code
 
 my $tmux_key_list = [
 	{ key => 'C-c', foo => sub {exit(0)}, label => 'Exit pacbro' },
@@ -79,11 +79,11 @@ my $pac_hist_nav_keys = []; # key, dir, label, foo
 
 my $app_menu_list = [
 	{ code => "LAYOUT", label => 'Detail View/Layout', key => 'M-v', popper => \&menu_list_popper, handler => \&tmux_layout, multi => 0, list => $layout_list },
-	{ code => "REPOFILTER", label => 'Select Repos', key => 'M-r', popper => \&menu_list_popper, handler => \&repo_filter, multi => 1 },
-	{ code => "INSTFILTER", label => 'Installed Status Filter', key => 'M-i', popper => \&menu_list_popper, handler => \&inst_filter, multi => 1, list => $pac_inst_states },
-	{ code => "OUTDATED", label => 'Outdated Status Filter', key => 'M-o', popper => \&menu_list_popper, handler => \&outdated_filter, multi => 0, list => $outdated_states },
-	{ code => "rxf", label => 'Search filenames', key => 'M-f', popper => \&menu_popper_rx, flt => 'frx' },
-	{ code => "rxd", label => 'Search package details', key => 'M-d', popper => \&menu_popper_rx, flt => 'drx' },
+	{ code => "REPOFILTER", label => 'Repo filter', key => 'M-r', popper => \&menu_list_popper, handler => \&repo_filter, multi => 1 },
+	{ code => "INSTFILTER", label => 'Installed status filter', key => 'M-i', popper => \&menu_list_popper, handler => \&inst_filter, multi => 1, list => $pac_inst_states },
+	{ code => "OUTDATED", label => 'Outdated status filter', key => 'M-o', popper => \&menu_list_popper, handler => \&outdated_filter, multi => 0, list => $outdated_states },
+	{ code => "rxf", label => 'Search filenames', key => 'M-f', popper => \&menu_popper_rx_filter }, # , flt => 'frx'
+	{ code => "rxd", label => 'Search package details', key => 'M-d', popper => \&menu_popper_rx_filter }, # , flt => 'drx'
 	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 },
 	{ code => "KEYMAP", label => 'Keyboard Shortcuts', key => 'M-k', popper => \&menu_keymap },
 	{ code => "ABOUT", label => 'Help / About', key => 'M-?', popper => \&menu_about },
@@ -93,16 +93,16 @@ my $app_menu_map = {};
 for my $menu (@$app_menu_list) {
 	$app_menu_map->{$menu->{code}} = $menu;
 	push(@$tmux_key_list, { key => $menu->{key}, foo => sub { $menu->{popper}->($_[0], $menu) }, label => $menu->{label}, menu => $menu });
-	$cmd_map->{$menu->{code}} = sub { menu_handle_response($_[0], $menu, $_[1]) };
+	$cmd_map->{$menu->{code}} = sub { menu_handle_response($_[0], $menu, $_[1]) }; # add commands for menu items
 }
 $app_menu_map->{MAINMENU}->{list} = $app_menu_list;
 
 # create files for each pane
 my $tmux_pan_list = [
-	{ code => 'main', key => 'C-Left', label => 'Main package list' },
-	{ code => 'info', key => 'C-Up', label => 'Package info' },
-	{ code => 'botl', key => 'C-Down', label => 'Detail list 1' },
-	{ code => 'botr', key => 'C-Right', label => 'Detail list 2' },
+	{ code => 'main', label => 'Main package list' },
+	{ code => 'info', label => 'Package info' },
+	{ code => 'botl', label => 'Detail list 1' },
+	{ code => 'botr', label => 'Detail list 2' },
 ];
 
 # Global state
@@ -132,7 +132,7 @@ my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};
 $show_help && do{ print(help()); exit(0); };
 tmux_start($tmux);
 
-while (my $msg = tmux_next_msg($tmux)) {
+while (my $msg = pacbro_next_input_cmd($tmux)) {
 	$msg =~ m/^([\w\-]+)(?:[ ]+(.*))?$/m || do{ report("Bad command: '$msg'"); next };
 	# report("MSG queue: $msg");
 	my ($code, $detail) = (uc($1), $2);
@@ -156,10 +156,14 @@ sub tmux_start {
 	report("starting sess: $sess_code");
 	my $cmd_in = $tmux->{cmd_in};
 	POSIX::mkfifo($cmd_in, oct(700));
+	my $ctl_proc_fid = "/proc/$$";
 
 	my $tpid = fork();
 	if ($tpid == 0) {
-		my $less_cmd = "less -X -~ -S -Q -P '~' --mouse"; # -X
+		# lesskey codes can be checked as: cat -vte
+		write_file("$work_dir/lesskey.main", "q invalid\n"); # alt+q to exit less
+		write_file("$work_dir/lesskey.pop", "^q quit\n^[q quit\nq quit\n"); # alt+q to exit less
+		my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.main'";
 		my $info_cmd = "echo PANREADY info \\\$TMUX_PANE >> $cmd_in; while : ; do $less_cmd $tmux->{pans}->{info}->{file}; done";
 
 		my $main_file = $tmux->{pans}->{main}->{file};
@@ -186,7 +190,7 @@ sub tmux_start {
 			" >/dev/null 2>>'$log_fname' ; " .
 			# in case tmux is killed, send QUIT to the main process and run cleanup just in case
 			# "[ -p '$cmd_in' ] && echo QUIT >> '$cmd_in'"
-			"[ -p '$cmd_in' ] && perl -e 'alarm 2; sysopen(FH, q|$cmd_in|, Fcntl::O_WRONLY|Fcntl::O_APPEND) and CORE::say FH q|QUIT|' ;" .
+			"[ -p '$cmd_in' ] && [ -d $ctl_proc_fid ] && perl -e 'alarm 2; sysopen(FH, q|$cmd_in|, Fcntl::O_WRONLY|Fcntl::O_APPEND) and CORE::say FH q|QUIT|' ;" .
 			"rm -f $path_pfx.*"
 		) or do {
 			$tmux = {};
@@ -275,7 +279,7 @@ sub tmux_exit_cleanup {
 	$::{session_files_rm}++ || system("rm -f $path_pfx.*");
 }
 
-sub tmux_next_msg {
+sub pacbro_next_input_cmd {
 	my ($tmux) = @_;
 	my $from_tmux = $tmux->{from_tmux};
 	if (defined($from_tmux) && scalar(@$from_tmux)) {
@@ -285,7 +289,7 @@ sub tmux_next_msg {
 		if (my $msgs_text = run_blocking(1, sub { read_file($tmux->{cmd_in}, 1) })) {
 			my @lines = ($msgs_text =~ m/\V+/gs);
 			$tmux->{from_tmux} = scalar(@lines) ? \@lines : next;
-			return tmux_next_msg($tmux);
+			return pacbro_next_input_cmd($tmux);
 		}
 		waitpid($tmux->{tpid}, WNOHANG) && report("tmux exited, bye", 0); # tmux exited
 		-e $tmux->{cmd_in} || report("feedback pipe kaput, bye", 0); # communication pipe is gone
@@ -323,7 +327,7 @@ sub pipcmd_PACNAV {
 	# report("NAV: $pac_nm");
 
 	$pac_nm && $pac_nm =~ m{^/} && # is a simple file
-		return file_sel($tmux, $tmux->{pac_file} = $pac_nm);
+		return file_sel($tmux, $tmux->{pac_file_sel} = $pac_nm);
 
 	$pac_nm = $pac_nm =~ m/^(\S+)/ ? $1 : return tmux_status_notify($tmux, "Bad package spec: $pac_nm");
 
@@ -376,9 +380,10 @@ sub package_sel {
 sub file_sel {
 	my ($tmux, $file) = @_;
 	-f $file || return;
-	my $pani = $tmux->{pans}->{info};
-	system("(grep -IF '' '$file' || file -b '$file') > '$pani->{file}'");
-	$tmux->{comm}->("send-keys -t $pani->{id} R");
+	my $file_q = cmd_arg($file);
+	my $less_pop = "less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.pop'";
+	my $tmux_cmd_arg = "{ grep -IF '' $file_q || { file -b $file_q; stat $file_q; }; } | $less_pop";
+	system("$tumx_cmd display-popup -h 100\% -w 100\% -E ".cmd_arg($tmux_cmd_arg)." &");
 }
 
 # LOADING / PARSING data
@@ -655,7 +660,7 @@ sub json_parse_obj {
 				$pval = 0;
 			} elsif ($cmd_ch eq '{' || $cmd_ch eq '[') { # start of object or array
 				$objn = $cmd_ch eq '{' ? {} : [];
-				if (defined($obj)) { # last object exists
+				if (defined($obj)) { # previous object exists (not the initial pass)
 					if (ref $obj eq 'HASH') { # prev object is HASH
 						defined($pname) || return $err->("unknown prop name");
 						$obj->{$pname} = $objn;
@@ -706,7 +711,7 @@ sub json_parse_obj {
 		}
 	}
 	return $err->("JSON ended prematurely");
-}
+} # returns either {res => obj} or {err => "err", pos => 123, token => "last match", msg => "err+details"}
 
 # POPUP logic
 
@@ -727,7 +732,7 @@ sub tmux_popup_display {
 	my $pop_height = '-h '.((($_ = scalar(@$item_list)) < 19 ? $_ : 19) + 3);
 	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\t]+)/g)'";
 	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\\\v+/\t/gsr)'";
-	my $fzf_pipe = qq`$fzfx $multi --marker='# ' --pointer='█' --no-info --disabled -q '$title' --bind alt-q:abort $fzf_chosen`;
+	my $fzf_pipe = qq`$fzfx $multi --marker='# ' --pointer='█' --no-info --disabled -q '$title' --bind alt-q:abort,q:abort $fzf_chosen`;
 	system(qq`$tumx_cmd display-popup -E $pop_height "$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}" &`);
 }
 
@@ -826,7 +831,7 @@ sub repo_filter {
 	my ($tmux, $menu, $repos) = @_;
 	!@$repos && return; # exited via Esc
 	$repos = [] if scalar(@{$tmux->{db}->{repo_lst}}) == scalar(@$repos);
-	my $flt_repo = join("\n", @$repos);
+	my $flt_repo = join("\n", @$repos); # 1 repo per line text
 	$flt_repo eq ($tmux->{flt}->{repo} // '') && return; # not changed
 	$tmux->{flt}->{repo} = $flt_repo;
 	report("Repo filter: " . ($tmux->{flt}->{repo} =~ s/\n+/, /gr));
@@ -874,11 +879,11 @@ sub key_label {
 
 sub menu_keymap {
 	my ($tmux) = @_;
-	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12"; # -X
+	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
 	my $keymap_file = "$path_pfx.popup";
 	my $key_list_text = keybindings_text();
 	write_file($keymap_file, <<TEXT);
-(Press 'q' to exit this popup)
+(Press 'Alt+q' to exit this popup)
 
 $key_list_text
 TEXT
@@ -902,17 +907,17 @@ TEXT
 
 sub menu_about {
 	my ($tmux) = @_;
-	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12"; # -X
+	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
 	my $about_file = "$path_pfx.popup";
-	write_file($about_file, "(Press 'q' to exit this popup)\n\n".help());
+	write_file($about_file, "(Press 'Alt+q' to exit this popup)\n\n".help());
 	system(qq`$tumx_cmd display-popup -h 95\% -w 75 -E "$less_cmd $about_file" &`);
 }
 
-sub menu_popper_rx {
+sub menu_popper_rx_filter {
 	my ($tmux, $menu) = @_;
 	my $prev_flt = ($_ = $tmux->{flt}->{$menu->{code}}) ? "-i ".cmd_arg($_) : '';
 	my $prompt_cmd = qq`echo " $menu->{label} (Perl RegEx)"`;
-	my $read_cmd = "read -e -r $prev_flt -p ' > ' REXFILT; echo \$REXFILT";
+	my $read_cmd = qq`read -e -r $prev_flt -p ' > ' REXFILT; echo "\$REXFILT"`;
 	my $bash_read_cmd = 'REXFILT="$(bash -c '.cmd_arg($read_cmd).')"'; # ensure bash readline is used
 	my $send_back_cmd = qq`echo "PACFLT $menu->{code} \$REXFILT" >> '$tmux->{cmd_in}'`;
 	system("$tumx_cmd display-popup -h 4 -w 60 -E ".cmd_arg("$prompt_cmd; $bash_read_cmd; $send_back_cmd")." &");
@@ -1059,8 +1064,10 @@ ABOUT
     * selected package file contents or type
 
     The bottom panels display:
-    * related package lists: dependencies, dependants, conflicts etc
-    * list of files installed from the package
+    * related package lists: dependencies, dependants, conflicts etc;
+      package navigation within those lists is supported.
+    * list of files installed from the package; file preview is
+      supported
     The contents of these panels can be chosen via main menu or
     key bindings
 

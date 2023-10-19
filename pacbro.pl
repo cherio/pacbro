@@ -574,6 +574,9 @@ sub pac_fill_in_info { # not installed, in AUR
 			#pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
 		} else {
 			pac_add_sync_info($pac, ''.`pacman -Si '$pac->{name}'`, $pac->{info});
+			if ($pac->{repo_nm} eq '~foreign') {
+				$pac->{info}->{'Repository'} //= '~foreign';
+			}
 		}
 	}
 }
@@ -731,7 +734,7 @@ sub tmux_popup_display {
 	}
 	my $item_names = join("\t", @$item_list);
 	report("Multiselect popup for: $item_names");
-	$multi = $multi ? '-m --bind ctrl-a:select-all' : '';
+	$multi = $multi ? '-m --bind ctrl-a:select-all,space:toggle+down' : '';
 	my $pop_height = '-h '.((($_ = scalar(@$item_list)) < 19 ? $_ : 19) + 3);
 	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\t]+)/g)'";
 	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\\\v+/\t/gsr)'";
@@ -1061,9 +1064,7 @@ ABOUT
     of "pacman"; AUR web API is used to get package information
     from AUR repo if launched with the "--aur" option.
 
-    The top panel displays one of the following:
-    * package information fetched with pacman -Qi|-Si
-    * selected package file contents or type
+    The top panel displays package information.
 
     The bottom panels display:
     * related package lists: dependencies, dependants, conflicts etc;
@@ -1082,6 +1083,12 @@ ABOUT
 
     This program does not have package management capabilities
     (not yet) and can run as any unprivileged user.
+
+    This program extensively relies upon "tmux" multi-panel layout
+    and "fzf" list management. A small subset of keybindings were
+    redefined, but the rest of keys should work as locally configured;
+    those who have experience working in tmux should find themselves
+    in a familiar environment.
 
     Fun fact: it was tested to fit and run in 80x24 green text
     terminal, although I hope you have a better screen.
@@ -1104,7 +1111,7 @@ AUR
 
     It is impractical to load details of all packages in AUR,
     there are just too many of them. This means search by package
-    details doesn't work for not installed AUR packages.
+    details doesn't work for AUR packages, unless they are installed.
 
     For the same reason auto display of package details is disabled,
     when AUR listing is on. You need to explicitly hit <Enter> on

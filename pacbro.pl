@@ -60,7 +60,8 @@ my $cmd_map = { # commands sent back to pacbro from tmux windows, fzf, less, etc
 	KEYPRESS => \&pipcmd_KEYPRESS,
 	PACNAV => \&pipcmd_PACNAV,
 	WINRESZ => \&tmux_layout_render,
-	PANFOCUS => \&pipcmd_PANFOCUS,
+	PANFOCUSIN => \&pipcmd_PANFOCUSIN,
+	PANFOCUSOUT => \&pipcmd_PANFOCUSOUT,
 	PACFLT => \&pipcmd_PACFLT,
 }; # each handler gets 2 args: global tmux object & command code
 
@@ -85,6 +86,8 @@ my $app_menu_list = [
 	{ code => "rxf", label => 'Search filenames', key => 'M-f', popper => \&menu_popper_rx_filter }, # , flt => 'frx'
 	{ code => "rxd", label => 'Search package details', key => 'M-d', popper => \&menu_popper_rx_filter }, # , flt => 'drx'
 	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 },
+	{ code => "RPTDEPERR", label => 'Find dependency issues (not implemented)', popper => \&menu_report }, # cycles, missing deps
+	{ code => "RPTUNNEEDED", label => 'Find not needed (not implemented)', popper => \&menu_report }, # only dependencies, including cycles
 	{ code => "KEYMAP", label => 'Keyboard Shortcuts', key => 'M-k', popper => \&menu_keymap },
 	{ code => "ABOUT", label => 'Help / About', key => 'M-?', popper => \&menu_about },
 ];
@@ -92,7 +95,9 @@ my $app_menu_list = [
 my $app_menu_map = {};
 for my $menu (@$app_menu_list) {
 	$app_menu_map->{$menu->{code}} = $menu;
-	push(@$tmux_key_list, { key => $menu->{key}, foo => sub { $menu->{popper}->($_[0], $menu) }, label => $menu->{label}, menu => $menu });
+	if ($menu->{key}) {
+		push(@$tmux_key_list, { key => $menu->{key}, foo => sub { $menu->{popper}->($_[0], $menu) }, label => $menu->{label}, menu => $menu });
+	}
 	$cmd_map->{$menu->{code}} = sub { menu_handle_response($_[0], $menu, $_[1]) }; # add commands for menu items
 }
 $app_menu_map->{MAINMENU}->{list} = $app_menu_list;
@@ -256,9 +261,10 @@ sub pipcmd_TMUXUP {
 
 	#$tmux->{comm}->(qq`set-hook -w window-resized "run 'echo WINRESZ >> $tmux->{cmd_in}'"`);
 	for my $pan (@$tmux_pan_list) {
-		#$tmux->{comm}->(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
-		#report(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUS $pan->{code} >> $tmux->{cmd_in}'"`);
+		#$tmux->{comm}->(qq`set-hook -p -t $pan->{id} pane-focus-in "run 'echo PANFOCUSIN $pan->{code} >> $tmux->{cmd_in}'"`);
 	}
+	#my $pan_info = $tmux->{pans}->{info};
+	#$tmux->{comm}->(qq`set-hook -p -t $pan_info->{id} pane-focus-out "run 'echo PANFOCUSOUT $pan_info->{code} >> $tmux->{cmd_in}'"`);
 
 	pac_db_load_full($tmux) if !$tmux->{db};
 	pac_list_load($tmux);
@@ -358,7 +364,7 @@ sub package_sel {
 
 	if (!($_ = $tmux->{pac}) || $_->{name} ne $pac->{name}) { # if package is different
 		write_file("$tmux->{pans}->{info}->{file}", $pac->{info_text} // '');
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} R");
+		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} g R");
 	}
 	$tmux->{pac} = $pac;
 	my $pac_det_lists = pac_list_get($pac); # { list_name => multiline_text }
@@ -570,13 +576,12 @@ sub pac_fill_in_info { # not installed, in AUR
 	my ($tmux, $pac) = @_;
 	if (!$pac->{info} || !$pac->{info}->{'Repository'}) {
 		if ($pac->{repo_nm} eq 'aur') {
-			pac_add_aur_info($tmux, $pac);
-			#pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
+			pac_add_aur_info($tmux, $pac); # pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
 		} else {
 			pac_add_sync_info($pac, ''.`pacman -Si '$pac->{name}'`, $pac->{info});
-			if ($pac->{repo_nm} eq '~foreign') {
-				$pac->{info}->{'Repository'} //= '~foreign';
-			}
+			#if ($pac->{repo_nm} eq '~foreign' && !$pac->{info}->{'Repository'}) {
+			#	$pac->{info}->{'Repository'} = '~foreign';
+			#}
 		}
 	}
 }
@@ -593,8 +598,12 @@ sub pac_add_sync_info {
 	} else { # not installed
 		$pac->{info} = $sync_props;
 	}
-	$pac->{repo_nm} //= $sync_props->{'Repository'};
 	$pac->{info_text} = ($pac->{info_text} // '') . "--- Sync DB info ---\n" . $info_text;
+
+	if (!$pac->{info}->{'Repository'}) {
+		$pac->{info}->{'Repository'} = $pac->{repo_nm};
+		$pac->{info_text} .= "Repository: $pac->{repo_nm}\n";
+	}
 }
 
 sub pac_add_aur_info { #
@@ -818,9 +827,17 @@ sub tmux_layout_render {
 	($_ = $tmux->{pac}) && package_sel($tmux, $_);
 }
 
-sub pipcmd_PANFOCUS { # possibly unnecessary
+sub pipcmd_PANFOCUSIN { # possibly unnecessary
 	my ($tmux, $pane_code) = @_;
-	report("pipcmd_PANFOCUS: $pane_code");
+	report("pipcmd_PANFOCUSIN: $pane_code");
+}
+
+sub pipcmd_PANFOCUSOUT { # possibly unnecessary
+	my ($tmux, $pane_code) = @_;
+	my $pan = $tmux->{pans}->{$pane_code};
+	if ($pane_code eq 'info') {
+		# $tmux->{comm}->("send-keys -t $pan->{id} 'g'"); # scroll to top
+	}
 }
 
 # MENU handlers, filters
@@ -893,6 +910,50 @@ sub menu_keymap {
 $key_list_text
 TEXT
 	system(qq`$tumx_cmd display-popup -h 100\% -w 100\% -E "$less_cmd $keymap_file" &`);
+}
+
+sub menu_report {
+	my ($tmux, $menu_item) = @_;
+	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
+	my $keymap_file = "$path_pfx.popup";
+	# walk up the tree of packages
+	my $rpacs = {};
+	my $cycles = {}; # {id => {cycle}}
+	# report pac: $rpac = { cycles => [] }
+	# cycle: $cyc = { pacs => {pacnm => $rpac}, loop => [pacnm, ...], id => '' };
+	# $tmux->{db} = {repo_map => $repo_map, repo_lst => $repo_lst, pac_map => $pac_map, pac_lst => $pac_lst};
+	my $pac_map = $tmux->{db}->{pac_map};
+	for my $pac (@{$tmux->{db}->{pac_lst}}) {
+		$pac->{inst} || next; # analyze only installed
+		# duplicate for "provides" entries
+		# create "requires" & "optionally requires" lists/maps
+		$rpacs->{$pac->{name}} = {name => $pac->{name}};
+		#my $cyc = pac_dep_cyc_exam($pac, $res_pac_reg, []) // next;
+		# log this cycle
+	}
+
+	my $less_text = "$menu_item->{code}"; # TODO - implememt
+	write_file($keymap_file, <<TEXT);
+$less_text
+TEXT
+	system(qq`$tumx_cmd display-popup -h 100\% -w 100\% -E "$less_cmd $keymap_file" &`);
+}
+
+sub pac_dep_cyc_exam {
+	my ($pac, $res_pac_reg, $stack, $chains) = @_;
+	my $pac_name = $pac->{name} // die("Can not find a package\n");
+	my $reg_pac = ($res_pac_reg->{$pac_name} //= {name => $pac_name, stage => 0}); # stage 0 - analysis started
+	$reg_pac->{stage} == -1 && return; # already reviewed
+	if ($reg_pac->{stage}) { # new cycle found
+		# trace back the stack
+		return {name => $pac_name, chain => [$pac_name]};
+	}
+	$reg_pac->{stage} = 1;
+	my $pacs_required_txt = pac_list_get($pac)->{'Depends On'};
+	my @pacs_required = ($pacs_required_txt =~ m/(?:^|\s)([^\s\=\>\<]+)/gs);
+	for my $pac_req (@pacs_required) {
+
+	}
 }
 
 sub keybindings_text {
@@ -1087,11 +1148,11 @@ ABOUT
     This program extensively relies upon "tmux" multi-panel layout
     and "fzf" list management. A small subset of keybindings were
     redefined, but the rest of keys should work as locally configured;
-    those who have experience working in tmux should find themselves
-    in a familiar environment.
+    those having experience working in tmux should find themselves in
+    a familiar environment.
 
-    Fun fact: it was tested to fit and run in 80x24 green text
-    terminal, although I hope you have a better screen.
+    Fun fact: $script_name was tested to fit and run in 80x24 green
+    text terminal, although I hope you have a better screen.
 
 DEPENDENCIES
 
@@ -1107,15 +1168,12 @@ DEPENDENCIES
 AUR
 
     For AUR packages to be loaded, "--aur" argument passed to this
-    program.
+    program. Without "--aur" the packages installed from it will be
+    classified as in "~foreign" repository.
 
     It is impractical to load details of all packages in AUR,
     there are just too many of them. This means search by package
     details doesn't work for AUR packages, unless they are installed.
-
-    For the same reason auto display of package details is disabled,
-    when AUR listing is on. You need to explicitly hit <Enter> on
-    the package in order to fetch package details from the web.
 
 KEYBINDINGS
 

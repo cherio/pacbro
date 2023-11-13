@@ -579,9 +579,6 @@ sub pac_fill_in_info { # not installed, in AUR
 			pac_add_aur_info($tmux, $pac); # pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
 		} else {
 			pac_add_sync_info($pac, ''.`pacman -Si '$pac->{name}'`, $pac->{info});
-			#if ($pac->{repo_nm} eq '~foreign' && !$pac->{info}->{'Repository'}) {
-			#	$pac->{info}->{'Repository'} = '~foreign';
-			#}
 		}
 	}
 }

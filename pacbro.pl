@@ -1144,12 +1144,12 @@ ABOUT
 
     This program extensively relies upon "tmux" multi-panel layout
     and "fzf" list management. A small subset of keybindings were
-    redefined, but the rest of keys should work as locally configured;
-    those having experience working in tmux should find themselves in
-    a familiar environment.
+    redefined, but the rest of tmux keys should work as locally
+    configured; those having experience working in tmux should find
+    themselves in a familiar environment.
 
     Fun fact: $script_name was tested to fit and run in 80x24 green
-    text terminal, although I hope you have a better screen.
+    text terminal, although I hope you have a bigger screen.
 
 DEPENDENCIES
 
@@ -1164,13 +1164,14 @@ DEPENDENCIES
 
 AUR
 
-    For AUR packages to be loaded, "--aur" argument passed to this
+    For AUR packages to be loaded, "--aur" argument must passed to this
     program. Without "--aur" the packages installed from it will be
     classified as in "~foreign" repository.
 
     It is impractical to load details of all packages in AUR,
-    there are just too many of them. This means search by package
-    details doesn't work for AUR packages, unless they are installed.
+    there are just too many of them. This means context search by
+    package details (e.g. by file name or package description) doesn't
+    work for AUR packages, unless they are installed.
 
 KEYBINDINGS
 

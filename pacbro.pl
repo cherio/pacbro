@@ -6,8 +6,8 @@
 use strict;
 use warnings;
 use Getopt::Long qw(:config no_auto_abbrev no_ignore_case);
-use Time::HiRes;
-use POSIX;
+use Time::HiRes ();
+use POSIX ();
 
 (`tty` =~ m{^/dev/} && $ENV{TERM}) || die("Must run in terminal\n");
 my $tmux_exe = exe_path('tmux') // die("Please install tmux\n");
@@ -168,7 +168,7 @@ sub tmux_start {
 		# lesskey codes can be checked as: cat -vte
 		write_file("$work_dir/lesskey.main", "q invalid\n"); # alt+q to exit less
 		write_file("$work_dir/lesskey.pop", "^q quit\n^[q quit\nq quit\n"); # alt+q to exit less
-		my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.main'";
+		my $less_cmd = "less -~ -S -Q --mouse --lesskey-src='$work_dir/lesskey.main'"; # -X -P '~'
 		my $info_cmd = "echo PANREADY info \\\$TMUX_PANE >> $cmd_in; while : ; do $less_cmd $tmux->{pans}->{info}->{file}; done";
 
 		my $main_file = $tmux->{pans}->{main}->{file};
@@ -222,7 +222,7 @@ sub fzf_pane_cmd {
 	$binds .= " --bind 'start:transform-query(cat ${\(cmd_arg($tit_file))})'";
 	$binds .= " --bind 'change:transform-query(cat ${\(cmd_arg($tit_file))})'";
 	$binds .= " --bind 'load:first'";
-	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info --prompt='' $binds ".($fzf_args // '');
+	my $pane_fzf = "cat '$file' 2>/dev/null | $fzfx --disabled --no-info --no-separator --prompt='' $binds ".($fzf_args // '');
 	return "echo PANREADY $pane_code \$TMUX_PANE >> '$tmux->{cmd_in}'; while : ; do $pane_fzf; done";
 }
 
@@ -299,7 +299,7 @@ sub pacbro_next_input_cmd {
 			$tmux->{from_tmux} = scalar(@lines) ? \@lines : next;
 			return pacbro_next_input_cmd($tmux);
 		}
-		waitpid($tmux->{tpid}, WNOHANG) && report("tmux exited, bye", 0); # tmux exited
+		waitpid($tmux->{tpid}, POSIX::WNOHANG) && report("tmux exited, bye", 0); # tmux exited
 		-e $tmux->{cmd_in} || report("feedback pipe kaput, bye", 0); # communication pipe is gone
 	}
 }
@@ -369,8 +369,7 @@ sub package_sel {
 	$tmux->{pac} = $pac;
 	my $pac_det_lists = pac_list_get($pac); # { list_name => multiline_text }
 
-	my $layout = $tmux->{layout}; # depending on the layout
-	my $list_names = $layout->{list_names};
+	my $list_names = $tmux->{layout}->{list_names}; # detail list names
 
 	write_file("$tmux->{pans}->{botl}->{file}", $pac_det_lists->{$list_names->[0]} // '');
 	$tmux->{comm}->("send-keys -t $tmux->{pans}->{botl}->{id} 'C-M-r'");
@@ -439,7 +438,7 @@ sub pac_db_load_full {
 
 	$tmux->{comm}->("set window-status-current-format 'Loading package data ... '");
 
-	report(timest(Time::HiRes::time()) . " will load packages now");
+	report(timest(Time::HiRes::time()) . " will load packages' metadata now");
 
 	my $pac_list_exe = $use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl";
 	open(my $pach, '-|', "$pac_list_exe | sort -k 2.1") or die("Couldn't load package info\n $!");
@@ -463,7 +462,7 @@ sub pac_db_load_full {
 	}
 	close($pach);
 
-	report(timest(Time::HiRes::time()) . " loaded the -Sl list");
+	report(timest(Time::HiRes::time()) . " loaded the -Sl list: ".scalar(@$pac_lst));
 	#report("DATED stats: ".(join(' ', %$debug_stat)));
 	# name, inst [EIN], repo_nm, repo, ver_inst, ver_repo, dated, info{}, pk_lists{}, info_text, file_list
 
@@ -501,14 +500,15 @@ sub pac_db_load_full {
 	{ # Load Sync DB
 		local $/ = "\n\n"; # gulp large text blocks
 		#my $aur_cmd = (@$pacs_aur) ? "; yay -Si ".join(' ', @$pacs_aur) : '';
-		my $aur_cmd = '';
+		my ($aur_cmd, $rec_cnt) = ('', 0);
 		open(my $pacsh, '-|', "pacman -Si $aur_cmd") or die("Couldn't load package info\n $!");
 		while (my $info_text = <$pacsh>) {
 			my $pac_props = pac_props_parse($info_text);
 			my $pac = $pac_map->{$pac_props->{'Name'}};
 			pac_add_sync_info($pac, $info_text, $pac_props);
+			$rec_cnt++;
 		}
-		report(timest(Time::HiRes::time()) . " loaded -Si recs");
+		report(timest(Time::HiRes::time()) . " loaded -Si recs: $rec_cnt");
 	}
 
 	# load file list per PAC
@@ -536,7 +536,7 @@ sub pac_db_load_full {
 sub pac_props_parse {
 	my ($rec_text) = @_;
 	my $pac_info = {}; # parsed map and some derived value
-	while ($rec_text =~ m/^(\w+(?:[ \-]+\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs) {
+	while ($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs) {
 		$pac_info->{$1} = $2;
 	}
 	return $pac_info;
@@ -578,7 +578,7 @@ sub pac_fill_in_info { # not installed, in AUR
 		if ($pac->{repo_nm} eq 'aur') {
 			pac_add_aur_info($tmux, $pac); # pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
 		} else {
-			pac_add_sync_info($pac, ''.`pacman -Si '$pac->{name}'`, $pac->{info});
+			pac_add_sync_info($pac, readpipe("pacman -Si '$pac->{name}'"), $pac->{info});
 		}
 	}
 }
@@ -749,7 +749,7 @@ sub tmux_popup_display {
 	$binds .= " --bind 'change:change-query($title)+beginning-of-line'"; #
 	$binds .= " --bind 'start:beginning-of-line'";
 
-	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --no-info --disabled -q '$title' $binds $fzf_chosen`;
+	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --no-info --no-separator --disabled -q '$title' $binds $fzf_chosen`;
 	system(qq`$tumx_cmd display-popup -E $pop_height "$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}" &`);
 }
 
@@ -1072,7 +1072,7 @@ sub write_file {
 
 sub timest {
 	my ($tm) = @_;
-	return strftime("%H:%M:%S", localtime($tm)) . substr(sprintf('%.3f', $tm - int($tm)), 1, 4);
+	return POSIX::strftime("%H:%M:%S", localtime($tm)) . substr(sprintf('%.3f', $tm - int($tm)), 1, 4);
 }
 
 sub run_blocking {

@@ -53,12 +53,18 @@ my $outdated_states = [
 	{ code => 'U', label => 'Installed, Up-to-date', short => 'up-to-date' },
 ];
 
+my $tag_filter_options = [
+	{ code => '', label => 'All', short => '*' },
+	{ code => 'T', label => 'Tagged/Bokmarked', short => 'tagged' },
+];
+
 my $cmd_map = { # commands sent back to pacbro from tmux windows, fzf, less, etc
 	QUIT => sub { exit(0) },
 	PANREADY => \&pipcmd_PANREADY,
 	TMUXUP => \&pipcmd_TMUXUP,
 	KEYPRESS => \&pipcmd_KEYPRESS,
 	PACNAV => \&pipcmd_PACNAV,
+	PACFOCUS => \&pipcmd_PACFOCUS,
 	WINRESZ => \&tmux_layout_render,
 	PANFOCUSIN => \&pipcmd_PANFOCUSIN,
 	PANFOCUSOUT => \&pipcmd_PANFOCUSOUT,
@@ -74,6 +80,7 @@ my $tmux_key_list = [
 	{ key => 'C-Up', foo => \&move_to_pane, label => 'Focus pane 🠝', arg => '-U' },
 	{ key => 'C-Down', foo => \&move_to_pane, label => 'Focus pane 🠟', arg => '-D' },
 	{ key => 'C-Right', foo => \&move_to_pane, label => 'Focus pane 🠞', arg => '-R' },
+	{ key => 'M-x', foo => \&package_tag, label => 'Tag/Mark current package' },
 ];
 
 my $pac_hist_nav_keys = []; # key, dir, label, foo
@@ -85,6 +92,7 @@ my $app_menu_list = [
 	{ code => "OUTDATED", label => 'Outdated status filter', key => 'M-o', popper => \&menu_list_popper, handler => \&outdated_filter, multi => 0, list => $outdated_states },
 	{ code => "rxf", label => 'Search filenames', key => 'M-f', popper => \&menu_popper_rx_filter }, # , flt => 'frx'
 	{ code => "rxd", label => 'Search package details', key => 'M-d', popper => \&menu_popper_rx_filter }, # , flt => 'drx'
+	{ code => "TAGGED", label => 'Show Tagged', key => 'M-t', popper => \&menu_list_popper, handler => \&tagged_filter, multi => 0, list => $tag_filter_options },
 	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 },
 	{ code => "RPTDEPERR", label => 'Find dependency issues (not implemented)', popper => \&menu_report }, # cycles, missing deps
 	{ code => "RPTUNNEEDED", label => 'Find not needed (not implemented)', popper => \&menu_report }, # only dependencies, including cycles
@@ -96,6 +104,7 @@ my $app_menu_map = {};
 for my $menu (@$app_menu_list) {
 	$app_menu_map->{$menu->{code}} = $menu;
 	if ($menu->{key}) {
+		$menu->{label} .= ' ('.key_label($menu->{key}).')'; # Add keybinding to the label
 		push(@$tmux_key_list, { key => $menu->{key}, foo => sub { $menu->{popper}->($_[0], $menu) }, label => $menu->{label}, menu => $menu });
 	}
 	$cmd_map->{$menu->{code}} = sub { menu_handle_response($_[0], $menu, $_[1]) }; # add commands for menu items
@@ -114,10 +123,14 @@ my $tmux_pan_list = [
 my $tmux = {
 	layout => $layout_list->[0],
 	hist => { arr => [] },
+	pac => undef, # currently selected package
+	focus => undef, # currently focused package
+	tagged => [], # list of tagged packages
 	flt => {},
 	pans => { map {$_->{code} => $_} @$tmux_pan_list }, # panes: main | [info / [botl | botr]]
+	pan => $tmux_pan_list->[0]->{code}, # default ficused pane
 	cmd_in => "$path_pfx.fifo", # communication from tmux
-	pac0 => {name => '', info_text => '', info => {}},
+	pac0 => {name => '', info_text => '', info => {}}, # pseudo package, when the list is empty
 };
 
 -d $work_dir || mkdir($work_dir) || die("Could not create work dir: $work_dir\n");
@@ -172,9 +185,10 @@ sub tmux_start {
 		my $info_cmd = "echo PANREADY info \\\$TMUX_PANE >> $cmd_in; while : ; do $less_cmd $tmux->{pans}->{info}->{file}; done";
 
 		my $main_file = $tmux->{pans}->{main}->{file};
-		my $sel_action = "execute-silent(echo PACNAV {} >> $tmux->{cmd_in})";
+		my $sel_action = "execute-silent(echo PACNAV {} >> $cmd_in)";
 		my $binds = "--bind enter:'$sel_action' --bind double-click:'$sel_action'";
 		$binds .= " --bind left-click:'$sel_action'";
+		$binds .= " --bind focus:'execute-silent(echo PACFOCUS {} >> $cmd_in)'";
 		# $binds .= " --bind focus:'$sel_action'" if !$use_aur; # do not auto-load package info
 		$binds .= " --bind 'ctrl-alt-r:reload(cat $main_file)'";
 		$binds .= " --bind 'load:first'";
@@ -233,17 +247,10 @@ sub pipcmd_PANREADY {
 		report("PANREADY command details is invalid: $detail", 1);
 	report("PANREADY $pane_name, $pane_id");
 	my $pans = $tmux->{pans};
-	$pans->{$pane_name}->{id} = $pane_id;
-	if (!$tmux->{ready}) {
-		$tmux->{ready} = scalar(grep {!$pans->{$_}->{id}} qw/main info botl/) ? 0 : 1;
-		$tmux->{ready} && system("echo TMUXUP >> $tmux->{cmd_in} &");
-	}
-}
+	my $pan = $pans->{$pane_name} // report("PANREADY, invalid panel code: $pane_name", 1);
+	$pan->{id} = $pane_id;
 
-sub pipcmd_TMUXUP {
-	my ($tmux, $detail) = @_;
-
-	$tmux->{comm_h} //= do {#
+	$tmux->{comm_h} //= do { # initialize one time only
 		my $control_output = "/dev/null"; # "$path_pfx.control";
 		open(my $tmux_comm_h, '|-', "$tumx_cmd -C attach -t $sess_code >$control_output") or report("Could not launch control mode", 1);
 		$tmux_comm_h->autoflush();
@@ -253,6 +260,18 @@ sub pipcmd_TMUXUP {
 		report("COMM set");
 		$tmux_comm_h
 	};
+
+	$tmux->{comm}->(qq`set-hook -p -t $pane_id pane-focus-in "run 'echo PANFOCUSIN $pane_name >> $tmux->{cmd_in}'"`);
+	$tmux->{comm}->(qq`set-hook -p -t $pane_id pane-focus-out "run 'echo PANFOCUSOUT $pane_name >> $tmux->{cmd_in}'"`);
+
+	if (!$tmux->{ready}) {
+		$tmux->{ready} = scalar(grep {!$pans->{$_}->{id}} qw/main info botl/) ? 0 : 1;
+		$tmux->{ready} && system("echo TMUXUP >> $tmux->{cmd_in} &");
+	}
+}
+
+sub pipcmd_TMUXUP {
+	my ($tmux, $detail) = @_;
 
 	$tmux->{comm}->("bind-key -n C-q kill-window");
 	for my $key (keys %$tmux_key_map) {
@@ -331,7 +350,7 @@ sub package_navigate {
 
 sub pipcmd_PACNAV {
 	my ($tmux, $pac_nm) = @_;
-	defined($pac_nm) || do { tmux_status_notify($tmux, "Bad NAV: $pac_nm"); return };
+	defined($pac_nm) || do { tmux_status_notify($tmux, "Bad NAV"); return };
 	# report("NAV: $pac_nm");
 
 	$pac_nm && $pac_nm =~ m{^/} && # is a simple file
@@ -356,6 +375,14 @@ sub pipcmd_PACNAV {
 	package_sel($tmux, $pac);
 }
 
+sub pipcmd_PACFOCUS {
+	my ($tmux, $pac_nm) = @_;
+	defined($pac_nm) || return;
+	$pac_nm =~ m{^/} && return;
+	$pac_nm =~ m/^([^\s\<\>\=]+)/ || return;
+	$tmux->{focus} = $1;
+	# tmux_status_notify($tmux, "Focused: $tmux->{focus}");
+}
 
 sub package_sel {
 	my ($tmux, $pac) = @_;
@@ -379,6 +406,15 @@ sub package_sel {
 		$tmux->{pans}->{botr}->{id} &&
 			$tmux->{comm}->("send-keys -t $tmux->{pans}->{botr}->{id} 'C-M-r'");
 	}
+}
+
+sub package_tag {
+	my ($tmux, $key_item) = @_;
+	$tmux->{pan} eq $tmux_pan_list->[0]->{code} || return; # only tag when in package list
+	my $pac_nm = $tmux->{focus} // return; # nothing to tag/bookmark
+	my $pac = $tmux->{db}->{pac_map}->{$pac_nm} // return;
+	my $action_msg = ($pac->{tag} = !$pac->{tag}) ? 'tagged' : 'untagged';
+	tmux_status_notify($tmux, "$pac_nm - $action_msg");
 }
 
 sub file_sel {
@@ -421,7 +457,9 @@ sub pac_filterer { # returns filter function
 	my $flt_dated = $tmux->{flt}->{dated} // '';
 	my $flt_rxf = $tmux->{flt}->{rxf} // '';
 	my $flt_rxd = $tmux->{flt}->{rxd} // '';
+	my $flt_tag = $tmux->{flt}->{tag};
 	return sub { # if returns "true" - the PAC is rejected
+		$flt_tag && return !$_[0]->{tag}; # if filtered by tagged - ignore other filters
 		defined($flt_repo) && !$flt_repo->{$_[0]->{repo_nm}} && return 1; # filter by REPO
 		$flt_inst && index($flt_inst, $_[0]->{inst} // 'N') == -1 && return 1; # filter by INST
 		$flt_dated && ($_[0]->{dated} // '') ne $flt_dated && return 1; # filter by OUTDATED
@@ -575,10 +613,11 @@ sub pac_list_get {
 sub pac_fill_in_info { # not installed, in AUR
 	my ($tmux, $pac) = @_;
 	if (!$pac->{info} || !$pac->{info}->{'Repository'}) {
+		$pac->{name} || return; # pseudo package
 		if ($pac->{repo_nm} eq 'aur') {
 			pac_add_aur_info($tmux, $pac); # pac_add_sync_info($pac, ''.`yay -Si -a '$pac->{name}'`, $pac->{info});
 		} else {
-			pac_add_sync_info($pac, readpipe("pacman -Si '$pac->{name}'"), $pac->{info});
+			pac_add_sync_info($pac, ''.readpipe("pacman -Si '$pac->{name}'"), $pac->{info});
 		}
 	}
 }
@@ -812,6 +851,7 @@ sub tmux_layout_render {
 		} else { # create right bottom pane
 			my $shell_cmd = cmd_arg(fzf_pane_cmd($tmux, 'botr'));
 			$tmux->{comm}->(qq`split-window -h -l 50\% -t $tmux->{pans}->{botl}->{id} "$shell_cmd"`);
+			# TODO: run all initialization for this pane, like for botl
 		}
 	} else {
 		if ($tmux->{pans}->{botr}->{id}) { # remove tmux "botr" pane
@@ -826,6 +866,7 @@ sub tmux_layout_render {
 
 sub pipcmd_PANFOCUSIN { # possibly unnecessary
 	my ($tmux, $pane_code) = @_;
+	$tmux->{pan} = $pane_code;
 	report("pipcmd_PANFOCUSIN: $pane_code");
 }
 
@@ -835,6 +876,7 @@ sub pipcmd_PANFOCUSOUT { # possibly unnecessary
 	if ($pane_code eq 'info') {
 		# $tmux->{comm}->("send-keys -t $pan->{id} 'g'"); # scroll to top
 	}
+	report("pipcmd_PANFOCUSOUT: $pane_code");
 }
 
 # MENU handlers, filters
@@ -884,6 +926,23 @@ sub outdated_filter {
 
 	$tmux->{flt}->{dated} = $code;
 	report("Set 'dated' filter: $tmux->{flt}->{dated}");
+
+	$menu->{chosen} = $item_list;
+	pac_list_load($tmux);
+	tmux_status_bar_update($tmux);
+}
+
+sub tagged_filter {
+	my ($tmux, $menu, $item_list) = @_;
+	!@$item_list && return; # exited via Esc
+	scalar(@$item_list) != 1 && report("Unusual situation in tagged_filter: ".scalar(@$item_list), 1);
+
+	my $code_by_lab = ($:{tag_code_by_lab} //= {map {$_->{label} => $_->{code}} @$tag_filter_options});
+	my $code = $code_by_lab->{$item_list->[0]} // return report("Unknown state: $item_list->[0]");
+	$code eq ($tmux->{flt}->{tag} // '') && return; # not changed
+
+	$tmux->{flt}->{tag} = $code;
+	report("Set 'tagged' filter: $tmux->{flt}->{tag}");
 
 	$menu->{chosen} = $item_list;
 	pac_list_load($tmux);
@@ -964,7 +1023,8 @@ $key_list_text
 In list/selection popup dialogs:
 
 Alt+q	Exit list popup
-Ctrl+a	Select all (multiselect dialogs)
+Ctrl+a	Select all in multiselect dialogs (fzf)
+Tab	Toggle select in multiselect lists (fzf)
 TEXT
 }
 
@@ -1023,6 +1083,9 @@ sub tmux_status_bar_update {
 	}
 	if ($flt->{rxd}) {
 		push(@bar_items, 'By Details');
+	}
+	if ($flt->{tag}) { # overwrite everything
+		@bar_items = ('tagged');
 	}
 
 	my $bar_text = join('', map {"[$_]"} @bar_items);

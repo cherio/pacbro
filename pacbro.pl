@@ -80,20 +80,20 @@ my $tmux_key_list = [
 	{ key => 'C-Up', foo => \&move_to_pane, label => 'Focus pane 🠝', arg => '-U' },
 	{ key => 'C-Down', foo => \&move_to_pane, label => 'Focus pane 🠟', arg => '-D' },
 	{ key => 'C-Right', foo => \&move_to_pane, label => 'Focus pane 🠞', arg => '-R' },
-	{ key => 'M-x', foo => \&package_tag, label => 'Tag/Mark current package' },
+	{ key => 'M-x', foo => \&package_tag, label => 'Tag/Mark current package (toggle)' },
 ];
 
 my $pac_hist_nav_keys = []; # key, dir, label, foo
 
 my $app_menu_list = [
 	{ code => "LAYOUT", label => 'Detail View/Layout', key => 'M-v', popper => \&menu_list_popper, handler => \&tmux_layout, multi => 0, list => $layout_list },
-	{ code => "REPOFILTER", label => 'Repo filter', key => 'M-r', popper => \&menu_list_popper, handler => \&repo_filter, multi => 1 },
+	{ code => "REPOFILTER", label => 'Repo filter', key => 'M-r', popper => \&menu_list_popper, handler => \&repo_filter, multi => 1 }, # list built later
 	{ code => "INSTFILTER", label => 'Installed status filter', key => 'M-i', popper => \&menu_list_popper, handler => \&inst_filter, multi => 1, list => $pac_inst_states },
 	{ code => "OUTDATED", label => 'Outdated status filter', key => 'M-o', popper => \&menu_list_popper, handler => \&outdated_filter, multi => 0, list => $outdated_states },
 	{ code => "rxf", label => 'Search filenames', key => 'M-f', popper => \&menu_popper_rx_filter }, # , flt => 'frx'
 	{ code => "rxd", label => 'Search package details', key => 'M-d', popper => \&menu_popper_rx_filter }, # , flt => 'drx'
-	{ code => "TAGGED", label => 'Show Tagged', key => 'M-t', popper => \&menu_list_popper, handler => \&tagged_filter, multi => 0, list => $tag_filter_options },
-	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 },
+	{ code => "TAGGED", label => 'Toggle "Show Tagged" packages', key => 'M-t', popper => \&toggle_tagged_filter }, # toggle_tagged_filter
+	{ code => "MAINMENU", label => 'Main Menu', key => 'M-m', popper => \&menu_list_popper, handler => \&high_level_menu_action, multi => 0 }, # list built later
 	{ code => "RPTDEPERR", label => 'Find dependency issues (not implemented)', popper => \&menu_report }, # cycles, missing deps
 	{ code => "RPTUNNEEDED", label => 'Find not needed (not implemented)', popper => \&menu_report }, # only dependencies, including cycles
 	{ code => "KEYMAP", label => 'Keyboard Shortcuts', key => 'M-k', popper => \&menu_keymap },
@@ -781,15 +781,15 @@ sub tmux_popup_display {
 	report("Multiselect popup for: $item_names");
 	$multi = $multi ? '-m --bind ctrl-a:select-all,space:toggle+down' : '';
 	my $pop_height = '-h '.((($_ = scalar(@$item_list)) < 19 ? $_ : 19) + 3);
-	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\t]+)/g)'";
-	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\\\v+/\t/gsr)'";
+	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\\t]+)/g)'";
+	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\v+/\\t/gsr)'";
 
 	my $binds = "--bind alt-q:abort,q:abort";
 	$binds .= " --bind 'change:change-query($title)+beginning-of-line'"; #
 	$binds .= " --bind 'start:beginning-of-line'";
 
 	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --no-info --no-separator --disabled -q '$title' $binds $fzf_chosen`;
-	system(qq`$tumx_cmd display-popup -E $pop_height "$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}" &`);
+	system(qq`$tumx_cmd display-popup -E $pop_height ${\cmd_arg("$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}")} &`);
 }
 
 sub menu_list_popper {
@@ -816,6 +816,7 @@ sub menu_handle_response {
 	my @sel_labels = (($details // '') =~ m{[^\t]+}gs);
 	@sel_labels || return;
 
+	$menu->{chosen} = \@sel_labels;
 	$menu_handler->($tmux, $menu, \@sel_labels);
 }
 
@@ -932,19 +933,9 @@ sub outdated_filter {
 	tmux_status_bar_update($tmux);
 }
 
-sub tagged_filter {
-	my ($tmux, $menu, $item_list) = @_;
-	!@$item_list && return; # exited via Esc
-	scalar(@$item_list) != 1 && report("Unusual situation in tagged_filter: ".scalar(@$item_list), 1);
-
-	my $code_by_lab = ($:{tag_code_by_lab} //= {map {$_->{label} => $_->{code}} @$tag_filter_options});
-	my $code = $code_by_lab->{$item_list->[0]} // return report("Unknown state: $item_list->[0]");
-	$code eq ($tmux->{flt}->{tag} // '') && return; # not changed
-
-	$tmux->{flt}->{tag} = $code;
-	report("Set 'tagged' filter: $tmux->{flt}->{tag}");
-
-	$menu->{chosen} = $item_list;
+sub toggle_tagged_filter {
+	my ($tmux, $menu) = @_;
+	$tmux->{flt}->{tag} = $tmux->{flt}->{tag} ? undef : 1;
 	pac_list_load($tmux);
 	tmux_status_bar_update($tmux);
 }

@@ -30,9 +30,7 @@ ABOUT
     of "pacman"; AUR web API is used to get package information
     from AUR repo if launched with the "--aur" option.
 
-    The top panel displays one of the following:
-    * package information fetched with pacman -Qi|-Si
-    * selected package file contents or type
+    The top panel displays package information.
 
     The bottom panels display:
     * related package lists: dependencies, dependants, conflicts etc;
@@ -52,8 +50,14 @@ ABOUT
     This program does not have package management capabilities
     (not yet) and can run as any unprivileged user.
 
-    Fun fact: it was tested to fit and run in 80x24 green text
-    terminal, although I hope you have a better screen.
+    This program extensively relies upon "tmux" multi-panel layout
+    and "fzf" list management. A small subset of keybindings were
+    redefined, but the rest of tmux keys should work as locally
+    configured; those having experience working in tmux should find
+    themselves in a familiar environment.
+
+    Fun fact: pacbro.pl was tested to fit and run in 80x24 green
+    text terminal, although I hope you have a bigger screen.
 
 DEPENDENCIES
 
@@ -68,41 +72,42 @@ DEPENDENCIES
 
 AUR
 
-    For AUR packages to be loaded, "--aur" argument passed to this
-    program.
+    For AUR packages to be loaded, "--aur" argument must passed to this
+    program. Without "--aur" the packages installed from it will be
+    classified as in "~foreign" repository.
 
     It is impractical to load details of all packages in AUR,
-    there are just too many of them. This means search by package
-    details doesn't work for not installed AUR packages.
-
-    For the same reason auto display of package details is disabled,
-    when AUR listing is on. You need to explicitly hit <Enter> on
-    the package in order to fetch package details from the web.
+    there are just too many of them. This means context search by
+    package details (e.g. by file name or package description) doesn't
+    work for AUR packages, unless they are installed.
 
 KEYBINDINGS
 
     Main screen keebindings
 
-    Ctrl+c	Exit pacbro
-    Alt+q	Exit pacbro
-    Alt+Left	Back in package view history
-    Alt+Right	Forward in package view history
-    Ctrl+Left	Focus pane 🠜
-    Ctrl+Up	Focus pane 🠝
-    Ctrl+Down	Focus pane 🠟
-    Ctrl+Right	Focus pane 🠞
-    Alt+v	Detail View/Layout
-    Alt+r	Repo filter
-    Alt+i	Installed status filter
-    Alt+o	Outdated status filter
-    Alt+f	Search filenames
-    Alt+d	Search package details
-    Alt+m	Main Menu
-    Alt+k	Keyboard Shortcuts
-    Alt+?	Help / About
+    Ctrl+c      Exit pacbro
+    Alt+q       Exit pacbro
+    Alt+Left    Back in package view history
+    Alt+Right   Forward in package view history
+    Ctrl+Left   Focus pane 🠜
+    Ctrl+Up     Focus pane 🠝
+    Ctrl+Down   Focus pane 🠟
+    Ctrl+Right  Focus pane 🠞
+    Alt+x       Tag/Mark current package (toggle)
+    Alt+v       Detail View/Layout (Alt+v)
+    Alt+r       Repo filter (Alt+r)
+    Alt+i       Installed status filter (Alt+i)
+    Alt+o       Outdated status filter (Alt+o)
+    Alt+f       Search filenames (Alt+f)
+    Alt+d       Search package details (Alt+d)
+    Alt+t       Toggle "Show Tagged" packages (Alt+t)
+    Alt+m       Main Menu (Alt+m)
+    Alt+k       Keyboard Shortcuts (Alt+k)
+    Alt+?       Help / About (Alt+?)
 
     In list/selection popup dialogs:
 
-    Alt+q	Exit list popup
-    Ctrl+a	Select all (multiselect dialogs)
+    Alt+q       Exit list popup
+    Ctrl+a      Select all in multiselect dialogs (fzf)
+    Tab         Toggle select in multiselect lists (fzf)
 

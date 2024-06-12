@@ -572,12 +572,8 @@ sub pac_db_load_full {
 }
 
 sub pac_props_parse {
-	my ($rec_text) = @_;
-	my $pac_info = {}; # parsed map and some derived value
-	while ($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs) {
-		$pac_info->{$1} = $2;
-	}
-	return $pac_info;
+	my ($rec_text) = @_; # parsed map
+	return {($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs)};
 }
 
 sub pac_list_get {
@@ -1005,7 +1001,7 @@ sub pac_dep_cyc_exam {
 
 sub keybindings_text {
 	my ($tmux) = @_;
-	my $key_list_text = join("\n", map {key_label($_->{key}) . "\t$_->{label}"} @$tmux_key_list);
+	my $key_list_text = join("\n", map {substr(key_label($_->{key}.(' 'x10)), 0, 12) . $_->{label}} @$tmux_key_list);
 	return <<"TEXT";
 Main screen keebindings
 
@@ -1013,9 +1009,9 @@ $key_list_text
 
 In list/selection popup dialogs:
 
-Alt+q	Exit list popup
-Ctrl+a	Select all in multiselect dialogs (fzf)
-Tab	Toggle select in multiselect lists (fzf)
+Alt+q       Exit list popup
+Ctrl+a      Select all in multiselect dialogs (fzf)
+Tab         Toggle select in multiselect lists (fzf)
 TEXT
 }
 

@@ -391,7 +391,7 @@ sub package_sel {
 
 	if (!($_ = $tmux->{pac}) || $_->{name} ne $pac->{name}) { # if package is different
 		write_file("$tmux->{pans}->{info}->{file}", $pac->{info_text} // '');
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} g R");
+		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} q g");
 	}
 	$tmux->{pac} = $pac;
 	my $pac_det_lists = pac_list_get($pac); # { list_name => multiline_text }

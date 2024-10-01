@@ -26,6 +26,7 @@ Getopt::Long::GetOptions(
 );
 
 # die("Install 'yay' to use AUR feature\n") if $use_aur && !$yayx;
+# TODO: new information report dialog - package full dependency tree
 
 my $shutdown_hooks = [];
 my $layout_list = [
@@ -196,14 +197,18 @@ sub tmux_start {
 		my $pane_fzf = "cat $main_file 2>/dev/null | $fzfx --cycle -e $binds";
 		my $main_cmd = "echo PANREADY main \\\$TMUX_PANE >> $cmd_in; while : ; do $pane_fzf; done";
 
-		exec("$tumx_cmd " .
-			"set -g status-left ''" . ' \; ' .
-			"set -g status-right ''" . ' \; ' .
-			"set -g window-status-current-format ''" . ' \; ' .
-			"set -g default-shell $ENV{SHELL}" . ' \; ' .
-			"set -g pane-active-border-style 'bg=grey'" . ' \; ' .
-			"set -g pane-border-lines double" . ' \; ' .
-			"set -g focus-events on" . ' \; ' .
+		write_file("$work_dir/tmux.conf", <<~"EOF");
+			set -g status-left ''
+			set -g status-right ''
+			set -g window-status-current-format ''
+			set -g default-shell $ENV{SHELL}
+			set -g pane-active-border-style 'bg=green'
+			set -g pane-border-lines double
+			set -g mouse on
+			set -g focus-events on
+			EOF
+
+		exec("$tumx_cmd -f ${\(cmd_arg(qq'$work_dir/tmux.conf'))} " .
 			qq`new-session -s $sess_code -n main "$main_cmd"` . ' \; ' .
 			qq`split-window -h -l 66\% "$info_cmd"` . ' \; ' .
 			qq`split-window -v ${\( cmd_arg(fzf_pane_cmd($tmux, 'botl')) )}` . ' \; ' .
@@ -775,7 +780,7 @@ sub tmux_popup_display {
 	}
 	my $item_names = join("\t", @$item_list);
 	report("Multiselect popup for: $item_names");
-	$multi = $multi ? '-m --bind ctrl-a:select-all,space:toggle+down' : '';
+	$multi = $multi ? '-m --bind ctrl-a:select-all,ctrl-e:deselect-all,ctrl-s:toggle-all,space:toggle+down' : '';
 	my $pop_height = '-h '.((($_ = scalar(@$item_list)) < 19 ? $_ : 19) + 3);
 	my $items_in = "perl -e 'CORE::say for(q|$item_names| =~ m/([^\\t]+)/g)'";
 	my $items_out = "perl -0777 -ne 'CORE::say q|$feedback_cmd |.(s/\\v+/\\t/gsr)'";
@@ -784,7 +789,7 @@ sub tmux_popup_display {
 	$binds .= " --bind 'change:change-query($title)+beginning-of-line'"; #
 	$binds .= " --bind 'start:beginning-of-line'";
 
-	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --no-info --no-separator --disabled -q '$title' $binds $fzf_chosen`;
+	my $fzf_pipe = qq`$fzfx $multi --marker='#' --pointer='>' --prompt='' --cycle --no-info --no-separator --disabled -q '$title' $binds $fzf_chosen`;
 	system(qq`$tumx_cmd display-popup -E $pop_height ${\cmd_arg("$items_in | $fzf_pipe | $items_out >> $tmux->{cmd_in}")} &`);
 }
 
@@ -1011,6 +1016,8 @@ In list/selection popup dialogs:
 
 Alt+q       Exit list popup
 Ctrl+a      Select all in multiselect dialogs (fzf)
+Ctrl+e      De-select all in multiselect dialogs (fzf)
+Ctrl+s      Toggle selections in multiselect dialogs (fzf)
 Tab         Toggle select in multiselect lists (fzf)
 TEXT
 }

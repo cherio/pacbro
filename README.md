@@ -109,5 +109,7 @@ KEYBINDINGS
 
     Alt+q       Exit list popup
     Ctrl+a      Select all in multiselect dialogs (fzf)
+    Ctrl+e      De-select all in multiselect dialogs (fzf)
+    Ctrl+s      Toggle selections in multiselect dialogs (fzf)
     Tab         Toggle select in multiselect lists (fzf)
 

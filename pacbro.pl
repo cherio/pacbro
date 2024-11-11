@@ -144,6 +144,7 @@ for my $pan (@$tmux_pan_list) {
 # Global environment variables
 $ENV{SHELL} = "/bin/sh";
 $ENV{FZF_DEFAULT_OPTS} = "--reverse";
+$ENV{LESSHISTFILE} = '-';
 
 # prepare key map
 my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};

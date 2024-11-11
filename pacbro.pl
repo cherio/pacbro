@@ -144,6 +144,7 @@ for my $pan (@$tmux_pan_list) {
 # Global environment variables
 $ENV{SHELL} = "/bin/sh";
 $ENV{FZF_DEFAULT_OPTS} = "--reverse";
+$ENV{LESSHISTFILE} = '-';
 
 # prepare key map
 my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};
@@ -228,7 +229,7 @@ sub tmux_start {
 	$tmux->{tpid} = $tpid;
 }
 
-sub fzf_pane_cmd {
+sub fzf_pane_cmd { # runz fzf command in the bottom (l or r) pane
 	my ($tmux, $pane_code, $fzf_args) = @_;
 	my $file = $tmux->{pans}->{$pane_code}->{file};
 	my $tit_file = "$file.title";
@@ -422,13 +423,17 @@ sub package_tag {
 	tmux_status_notify($tmux, "$pac_nm - $action_msg");
 }
 
-sub file_sel {
+sub file_sel { # view file or directory
 	my ($tmux, $file) = @_;
-	-f $file || return;
 	my $file_q = cmd_arg($file);
-	my $less_pop = "less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.pop'";
-	my $tmux_cmd_arg = "{ grep -IF '' $file_q || { file -b $file_q; stat $file_q; }; } | $less_pop";
-	system("$tumx_cmd display-popup -h 100\% -w 100\% -E ".cmd_arg($tmux_cmd_arg)." &");
+	my $tmux_pan_cmd = -d $file
+		? "cd $file_q; ls -l; bash" # is a directory
+		: -f _ ? "{ grep -IF '' $file_q || { file -b $file_q; stat $file_q; }; } | ".
+			"less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.pop'" # is a file
+		: ''; # no clue what it is
+	$tmux_pan_cmd
+		? system("$tumx_cmd display-popup -h 100\% -w 100\% -E ".cmd_arg($tmux_pan_cmd)." &")
+		: tmux_status_notify($tmux, "Not a file or directory: $file");
 }
 
 # LOADING / PARSING data

@@ -12,6 +12,9 @@ use POSIX ();
 (`tty` =~ m{^/dev/} && $ENV{TERM}) || die("Must run in terminal\n");
 my $tmux_exe = exe_path('tmux') // die("Please install tmux\n");
 my $fzfx = exe_path('fzf') // die("Please install fzf\n");
+my $lessx = exe_path('less') // die("Please install less\n");
+my $less_def_cmd = "LESSHISTFILE=- $lessx -~ -S -Q --mouse";
+
 # my $yayx = exe_path('yay');
 my $progname = ($0 =~ m{(?:^|/)([^/]+?)(?:\.\w+)?$}s) ? $1 : die("Bad program name: $0\n");
 my $work_dir = "/tmp/$progname-$ENV{USER}";
@@ -144,7 +147,6 @@ for my $pan (@$tmux_pan_list) {
 # Global environment variables
 $ENV{SHELL} = "/bin/sh";
 $ENV{FZF_DEFAULT_OPTS} = "--reverse";
-$ENV{LESSHISTFILE} = '-';
 
 # prepare key map
 my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};
@@ -183,7 +185,7 @@ sub tmux_start {
 		# lesskey codes can be checked as: cat -vte
 		write_file("$work_dir/lesskey.main", "q invalid\n"); # alt+q to exit less
 		write_file("$work_dir/lesskey.pop", "^q quit\n^[q quit\nq quit\n"); # alt+q to exit less
-		my $less_cmd = "less -~ -S -Q --mouse --lesskey-src='$work_dir/lesskey.main'"; # -X -P '~'
+		my $less_cmd = "$less_def_cmd --lesskey-src='$work_dir/lesskey.main'"; # -X -P '~'
 		my $info_cmd = "echo PANREADY info \\\$TMUX_PANE >> $cmd_in; while : ; do $less_cmd $tmux->{pans}->{info}->{file}; done";
 
 		my $main_file = $tmux->{pans}->{main}->{file};
@@ -429,7 +431,7 @@ sub file_sel { # view file or directory
 	my $tmux_pan_cmd = -d $file
 		? "cd $file_q; ls -l; bash" # is a directory
 		: -f _ ? "{ grep -IF '' $file_q || { file -b $file_q; stat $file_q; }; } | ".
-			"less -X -~ -S -Q -P '~' --mouse --lesskey-src='$work_dir/lesskey.pop'" # is a file
+			"$less_def_cmd -X -P '~' --lesskey-src='$work_dir/lesskey.pop'" # is a file
 		: ''; # no clue what it is
 	$tmux_pan_cmd
 		? system("$tumx_cmd display-popup -h 100\% -w 100\% -E ".cmd_arg($tmux_pan_cmd)." &")
@@ -954,7 +956,7 @@ sub key_label {
 
 sub menu_keymap {
 	my ($tmux) = @_;
-	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
+	my $less_cmd = "$less_def_cmd -X -P '~' --tabs=12 --lesskey-src='$work_dir/lesskey.pop'";
 	my $keymap_file = "$path_pfx.popup";
 	my $key_list_text = keybindings_text();
 	write_file($keymap_file, <<TEXT);
@@ -967,7 +969,7 @@ TEXT
 
 sub menu_report {
 	my ($tmux, $menu_item) = @_;
-	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
+	my $less_cmd = "$less_def_cmd -X -P '~' --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
 	my $keymap_file = "$path_pfx.popup";
 	# walk up the tree of packages
 	my $rpacs = {};
@@ -1029,7 +1031,7 @@ TEXT
 
 sub menu_about {
 	my ($tmux) = @_;
-	my $less_cmd = "less -X -~ -S -Q -P '~' --mouse --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
+	my $less_cmd = "$less_def_cmd -X -P '~' --tabs=12 --lesskey-src='$work_dir/lesskey.pop'"; # -X
 	my $about_file = "$path_pfx.popup";
 	write_file($about_file, "(Press 'Alt+q' to exit this popup)\n\n".help());
 	system(qq`$tumx_cmd display-popup -h 95\% -w 75 -E "$less_cmd $about_file" &`);

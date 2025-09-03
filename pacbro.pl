@@ -47,7 +47,7 @@ for my $layout_item (@$layout_list) {
 
 my $pac_inst_states = [
 	{ code => 'E', label => 'Explicitly Installed', short => 'explicit' },
-	{ code => 'I', label => 'Installed as Dependency', short => 'as dep' },
+	{ code => 'D', label => 'Installed as Dependency', short => 'as dep' }, # was 'I'
 	{ code => 'N', label => 'Not Installed', short => 'not inst' }
 ];
 
@@ -126,6 +126,7 @@ my $tmux_pan_list = [
 # Global state
 my $tmux = {
 	layout => $layout_list->[0],
+	db => undef, # this is a root map for package list, map, etc
 	hist => { arr => [] },
 	pac => undef, # currently selected package
 	focus => undef, # currently focused package
@@ -146,7 +147,7 @@ for my $pan (@$tmux_pan_list) {
 
 # Global environment variables
 $ENV{SHELL} = "/bin/sh";
-$ENV{FZF_DEFAULT_OPTS} = "--reverse";
+$ENV{FZF_DEFAULT_OPTS} = "--reverse --no-sort";
 
 # prepare key map
 my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};
@@ -402,7 +403,7 @@ sub package_sel {
 		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} q g");
 	}
 	$tmux->{pac} = $pac;
-	my $pac_det_lists = pac_list_get($pac); # { list_name => multiline_text }
+	my $pac_det_lists = pac_deps_lists_get_or_load($pac, $tmux->{db}->{pac_map}); # { list_name => multiline_text }
 
 	my $list_names = $tmux->{layout}->{list_names}; # detail list names
 
@@ -480,7 +481,7 @@ sub pac_filterer { # returns filter function
 	}
 }
 
-sub pac_db_load_full {
+sub pac_db_load_full { # load/pull full package list & package details map
 	my ($tmux) = @_;
 
 	my ($repo_map, $repo_lst, $pac_map, $pac_lst) = ({}, [], {}, []);
@@ -514,7 +515,6 @@ sub pac_db_load_full {
 
 	report(timest(Time::HiRes::time()) . " loaded the -Sl list: ".scalar(@$pac_lst));
 	#report("DATED stats: ".(join(' ', %$debug_stat)));
-	# name, inst [EIN], repo_nm, repo, ver_inst, ver_repo, dated, info{}, pk_lists{}, info_text, file_list
 
 	my $pacs_foreign = [];
 	my $pacs_aur = [];
@@ -525,22 +525,24 @@ sub pac_db_load_full {
 		open(my $pacqh, '-|', 'pacman -Qi') or die("Couldn't load package info\n $!");
 		while (my $rec_text = <$pacqh>) {
 			my $pac_props = pac_props_parse($rec_text);
-			my $pac = $pac_map->{$pac_props->{'Name'} // next};
+			my $pac_name = $pac_props->{'Name'};
+			my $pac = $pac_map->{$pac_name // next};
 			if (!$pac) {
 				my $repo_nm = '~foreign';
 				my $repo = ($repo_map->{$repo_nm} //= do {
 					push(@$repo_lst, my $repo = {name => $repo_nm});
 					$repo
 				});
-				$pac = {name => $pac_props->{'Name'}, repo_nm => $repo_nm};
-				$pac_map->{$pac_props->{'Name'}} = $pac;
+				$pac = {name => $pac_name, repo_nm => $repo_nm};
+				$pac_map->{$pac_name} = $pac;
 				push(@$pac_lst, $pac);
 				push(@$pacs_foreign, $pac);
 			} elsif ($pac->{repo_nm} eq 'aur') {
 				push(@$pacs_aur, $pac->{name});
 			}
-			$pac->{ver_inst} = $pac_props->{'Version'};
-			($_ = $pac_props->{'Install Reason'}) && ($pac->{inst} = substr($_, 0, 1)); # E|I
+			$pac->{ver_inst} = $pac_props->{'Version'} // die("No version: $pac_name\n");
+			my $inst_reason = substr($pac_props->{'Install Reason'} // die("No install reason: $pac_name\n"), 0, 1);
+			$pac->{inst} = $inst_reason eq 'I' ? 'D' : $inst_reason;
 			$loaded_recs++;
 			@$pac{qw/info info_text/} = ($pac_props, "--- Installed info ---\n" . $rec_text =~ s/\s*$/\n/sr);
 		}
@@ -588,8 +590,8 @@ sub pac_props_parse {
 	return {($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs)};
 }
 
-sub pac_list_get {
-	my ($pac) = @_;
+sub pac_deps_lists_get_or_load {
+	my ($pac, $pac_map) = @_;
 	($_ = $pac->{pk_lists}) && return $_;
 
 	my $list_prop_list = ($::{pac_list_prop_list} //=
@@ -599,18 +601,22 @@ sub pac_list_get {
 	my $pk_lists = {};
 
 	for my $list_code (@$list_prop_list) {
-		my $list_text = $pac_info->{$list_code} // next;
-		if ($list_text eq 'None') {
-			$list_text = '';
-		} else {
-			if ($list_code eq 'Optional Deps') {
-				$list_text =~ s/:[^\n]*//gs;
-				$list_text =~ s/\[[Ii]nstalled\]//gs;
-			}
-			my @pac_list = ($list_text =~ m/(\S+)/gs);
-			$list_text = join("\n", sort @pac_list);
+		my $list_text = $pac_info->{$list_code} || next;
+		next if ($list_text eq 'None');
+		if ($list_code eq 'Optional Deps') {
+			$list_text =~ s/:[^\n]*//gs;
 		}
-		$pk_lists->{$list_code} = $list_text;
+		my @pac_list = ();
+		while ($list_text =~ m/(\S+)/gs) {
+			my $pac_name = $1;
+			if (my $dep_pac = $pac_map->{$pac_name}) {
+				if (my $inst = $dep_pac->{inst}) {
+					$pac_name .= " [$inst:$dep_pac->{ver_inst}]";
+				}
+			}
+			push(@pac_list, $pac_name);
+		}
+		$pk_lists->{$list_code} = join("\n", sort @pac_list);
 	}
 
 	$pk_lists->{'Package Files'} = $pac->{file_list}; # add file list
@@ -995,7 +1001,7 @@ TEXT
 }
 
 sub pac_dep_cyc_exam {
-	my ($pac, $res_pac_reg, $stack, $chains) = @_;
+	my ($pac, $pac_db, $res_pac_reg, $stack, $chains) = @_;
 	my $pac_name = $pac->{name} // die("Can not find a package\n");
 	my $reg_pac = ($res_pac_reg->{$pac_name} //= {name => $pac_name, stage => 0}); # stage 0 - analysis started
 	$reg_pac->{stage} == -1 && return; # already reviewed
@@ -1004,7 +1010,7 @@ sub pac_dep_cyc_exam {
 		return {name => $pac_name, chain => [$pac_name]};
 	}
 	$reg_pac->{stage} = 1;
-	my $pacs_required_txt = pac_list_get($pac)->{'Depends On'};
+	my $pacs_required_txt = pac_deps_lists_get_or_load($pac, $pac_db->{pac_map})->{'Depends On'};
 	my @pacs_required = ($pacs_required_txt =~ m/(?:^|\s)([^\s\=\>\<]+)/gs);
 	for my $pac_req (@pacs_required) {
 

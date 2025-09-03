@@ -484,7 +484,7 @@ sub pac_filterer { # returns filter function
 sub pac_db_load_full { # load/pull full package list & package details map
 	my ($tmux) = @_;
 
-	my ($repo_map, $repo_lst, $pac_map, $pac_lst) = ({}, [], {}, []);
+	my ($pac_lst, $repo_map, $repo_lst, $pac_map) = ([], {}, [], {});
 	my ($stat_db_s_cnt, $stat_db_q_cnt) = (0, 0, 0);
 
 	$tmux->{comm}->("set window-status-current-format 'Loading package data ... '");
@@ -497,17 +497,14 @@ sub pac_db_load_full { # load/pull full package list & package details map
 		my ($repo_nm, $pac_nm) = m{^(\S++) (\S++)}s;
 		if ($pac_map->{$pac_nm // next}) {
 			$repo_nm eq 'aur' && next; # exclude AUR duplicates
-			index($repo_nm, '-testing') != -1 && next; # testing repos enabled - use them
+			index($repo_nm, '-testing') != -1 && next; # testing repos enabled - skip them
 		}
 
-		my $repo = ($repo_map->{$repo_nm} //= do {
-			push(@$repo_lst, my $repo = {name => $repo_nm});
-			$repo
-		});
+		if (!$repo_map->{$repo_nm}) {
+			push(@$repo_lst, $repo_map->{$repo_nm} = {name => $repo_nm});
+		}
 
-		# my $needs_upd = defined($ver_local);
 		my $pac = {name => $pac_nm, repo_nm => $repo_nm};
-
 		$pac_map->{$pac_nm} = $pac;
 		push(@$pac_lst, $pac);
 	}
@@ -516,29 +513,20 @@ sub pac_db_load_full { # load/pull full package list & package details map
 	report(timest(Time::HiRes::time()) . " loaded the -Sl list: ".scalar(@$pac_lst));
 	#report("DATED stats: ".(join(' ', %$debug_stat)));
 
-	my $pacs_foreign = [];
-	my $pacs_aur = [];
-
-	{ # always load installed data
+	{ # INSTALLED package data
 		local $/ = "\n\n"; # gulp large text blocks
 		my $loaded_recs = 0;
+		my $foreign_repo_nm = '~foreign';
 		open(my $pacqh, '-|', 'pacman -Qi') or die("Couldn't load package info\n $!");
 		while (my $rec_text = <$pacqh>) {
 			my $pac_props = pac_props_parse($rec_text);
-			my $pac_name = $pac_props->{'Name'};
-			my $pac = $pac_map->{$pac_name // next};
+			my $pac_name = $pac_props->{'Name'} // next;
+			my $pac = $pac_map->{$pac_name};
 			if (!$pac) {
-				my $repo_nm = '~foreign';
-				my $repo = ($repo_map->{$repo_nm} //= do {
-					push(@$repo_lst, my $repo = {name => $repo_nm});
-					$repo
-				});
-				$pac = {name => $pac_name, repo_nm => $repo_nm};
-				$pac_map->{$pac_name} = $pac;
-				push(@$pac_lst, $pac);
-				push(@$pacs_foreign, $pac);
-			} elsif ($pac->{repo_nm} eq 'aur') {
-				push(@$pacs_aur, $pac->{name});
+				if (!$repo_map->{$foreign_repo_nm}) {
+					push(@$repo_lst, $repo_map->{$foreign_repo_nm} = {name => $foreign_repo_nm});
+				}
+				push(@$pac_lst, $pac = $pac_map->{$pac_name} = {name => $pac_name, repo_nm => $foreign_repo_nm});
 			}
 			$pac->{ver_inst} = $pac_props->{'Version'} // die("No version: $pac_name\n");
 			my $inst_reason = substr($pac_props->{'Install Reason'} // die("No install reason: $pac_name\n"), 0, 1);
@@ -551,7 +539,6 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	{ # Load Sync DB
 		local $/ = "\n\n"; # gulp large text blocks
-		#my $aur_cmd = (@$pacs_aur) ? "; yay -Si ".join(' ', @$pacs_aur) : '';
 		my ($aur_cmd, $rec_cnt) = ('', 0);
 		open(my $pacsh, '-|', "pacman -Si $aur_cmd") or die("Couldn't load package info\n $!");
 		while (my $info_text = <$pacsh>) {
@@ -1115,7 +1102,7 @@ sub report {
 	$::{logger} //= do { # open(STDOUT, '|-', exe_path('logger'))
 		open(STDOUT, '>', $log_fname) or open(STDOUT, '>>', '/dev/null') or die("No logging $!\n");
 		open(STDERR, '>&=', \*STDOUT) or die("No logging $!\n");
-		STDOUT->autoflush(1);
+		STDOUT->autoflush(1) || 1
 	};
 	print($msg =~ s/\s*$/\n/r);
 	defined($exit_cd) && exit($exit_cd);

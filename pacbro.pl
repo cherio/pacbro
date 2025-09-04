@@ -491,8 +491,20 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	report(timest(Time::HiRes::time()) . " will load packages' metadata now");
 
-	my $pac_list_exe = $use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl";
-	open(my $pach, '-|', "$pac_list_exe | sort -k 2.1") or die("Couldn't load package info\n $!");
+	my $pac_list_exe = ($use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl") . ' | sort -k 2.1';
+	my ($pac_list_file, $pac_inst_file, $pac_sync_file, $pac_files_file) = ("$work_dir/db_pac_list", "$work_dir/db_pac_inst", "$work_dir/db_pac_sync", "$work_dir/db_pac_files");
+
+	system(<<~"CMD");
+		$pac_list_exe > $pac_list_file &
+		pacman -Qi > $pac_inst_file &
+		pacman -Si > $pac_sync_file &
+		pacman -Ql > $pac_files_file
+		wait
+	CMD
+
+	report(timest(Time::HiRes::time()) . " Dumped package metadata");
+
+	open(my $pach, '<', $pac_list_file) or die("Couldn't load package info\n $!");
 	while (<$pach>) {
 		my ($repo_nm, $pac_nm) = m{^(\S++) (\S++)}s;
 		if ($pac_map->{$pac_nm // next}) {
@@ -517,7 +529,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 		local $/ = "\n\n"; # gulp large text blocks
 		my $loaded_recs = 0;
 		my $foreign_repo_nm = '~foreign';
-		open(my $pacqh, '-|', 'pacman -Qi') or die("Couldn't load package info\n $!");
+		open(my $pacqh, '<', $pac_inst_file) or die("Couldn't load package info\n $!");
 		while (my $rec_text = <$pacqh>) {
 			my $pac_props = pac_props_parse($rec_text);
 			my $pac_name = $pac_props->{'Name'} // next;
@@ -539,8 +551,8 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	{ # Load Sync DB
 		local $/ = "\n\n"; # gulp large text blocks
-		my ($aur_cmd, $rec_cnt) = ('', 0);
-		open(my $pacsh, '-|', "pacman -Si $aur_cmd") or die("Couldn't load package info\n $!");
+		my $rec_cnt = 0;
+		open(my $pacsh, '<', $pac_sync_file) or die("Couldn't load package info\n $!");
 		while (my $info_text = <$pacsh>) {
 			my $pac_props = pac_props_parse($info_text);
 			my $pac = $pac_map->{$pac_props->{'Name'}};
@@ -551,18 +563,29 @@ sub pac_db_load_full { # load/pull full package list & package details map
 	}
 
 	# load file list per PAC
-	open(my $pacfh, '-|', 'pacman -Ql') or die("Couldn't load package info\n $!");
-	my ($pac_name_prev, $pac_files_prev) = ('', '');
+	open(my $pacfh, '<', $pac_files_file) or die("Couldn't load package info\n $!");
+	my $pac_name_prev = '';
+	my @pac_file_lines = ();
 	while (my $rec_text = <$pacfh>) {
-		my ($pac_name, $pac_file) = ($rec_text =~ m/^([^\ \n]+) (.+)/s);
+		my $fld_sep_idx = index($rec_text, ' ');
+		next if $fld_sep_idx < 1;
+		my $pac_name = substr($rec_text, 0, $fld_sep_idx);
+		my $file_name = substr($rec_text, $fld_sep_idx + 1);
 		if ($pac_name eq $pac_name_prev) {
-			$pac_files_prev .= $pac_file;
+			push(@pac_file_lines, $file_name);
 		} else {
-			($_ = $pac_map->{$pac_name_prev}) && ($_->{file_list} = $pac_files_prev);
-			($pac_name_prev, $pac_files_prev) = ($pac_name, $pac_file);
+			if ($_ = $pac_map->{$pac_name_prev}) {
+				$_->{file_list} = join('', @pac_file_lines);
+			}
+			@pac_file_lines = ($file_name);
+			$pac_name_prev = $pac_name;
 		}
 	};
-	($_ = $pac_map->{$pac_name_prev}) && ($_->{file_list} = $pac_files_prev);
+	if ($_ = $pac_map->{$pac_name_prev}) {
+		$_->{file_list} = join('', @pac_file_lines);
+	}
+
+	unlink($pac_list_file, $pac_inst_file, $pac_sync_file, $pac_files_file);
 
 	report(timest(Time::HiRes::time()) . " loaded -Ql file list");
 
@@ -574,7 +597,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 sub pac_props_parse {
 	my ($rec_text) = @_; # parsed map
-	return {($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs)};
+	return {($rec_text =~ m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S\V*(?:\v[ ]+[^\:\s]\V*)*)/mgs)}; # m/^(\w+(?:[ \-]\w+)*)[ ]*\:[ ]*(\S.*?)(?=\v[\w\v]|\v*\z)/mgs
 }
 
 sub pac_deps_lists_get_or_load {
@@ -598,7 +621,7 @@ sub pac_deps_lists_get_or_load {
 			my $pac_name = $1;
 			if (my $dep_pac = $pac_map->{$pac_name}) {
 				if (my $inst = $dep_pac->{inst}) {
-					$pac_name .= " [$inst:$dep_pac->{ver_inst}]";
+					$pac_name .= " [$dep_pac->{ver_inst}][$inst]";
 				}
 			}
 			push(@pac_list, $pac_name);
@@ -627,7 +650,7 @@ sub pac_add_sync_info {
 	my ($pac, $info_text, $sync_props) = @_;
 	$sync_props //= pac_props_parse($info_text);
 	$pac->{ver_repo} = $sync_props->{'Version'};
-	$pac->{dated} = defined($pac->{ver_inst}) ? ($pac->{ver_inst} eq $pac->{ver_repo} ? 'U' : 'O') : '';
+	$pac->{dated} = defined($_ = $pac->{ver_inst}) ? ($_ eq $pac->{ver_repo} ? 'U' : 'O') : '';
 	if (my $pac_info = $pac->{info}) { # installed, add sync DB info
 		while (my ($prop_name, $prop_val) = each %$sync_props) {
 			$pac_info->{$prop_name} //= $prop_val;
@@ -668,7 +691,8 @@ sub pac_add_aur_info { #
 	$pac_obj->{Repository} = 'aur';
 	$pac_obj->{'AUR URL'} = "https://aur.archlinux.org/packages/$pac->{name}";
 
-	my ($info, $info_text) = ({}, '');
+	my $info = {};
+	my @info_text_lines = ();
 
 	for my $prop_name (@$aur_props) {
 		my ($pname_aur, $pname_std) = ($prop_name->[0], $prop_name->[1] // $prop_name->[0]);
@@ -680,12 +704,12 @@ sub pac_add_aur_info { #
 			}
 			if ($prop_val ne '') {
 				$info->{$pname_std} = $prop_val;
-				$info_text .= substr($pname_std.' 'x$prop_len, 0, $prop_len)." : $prop_val\n";
+				push(@info_text_lines, substr($pname_std.' 'x$prop_len, 0, $prop_len)." : $prop_val\n");
 			}
 		}
 	}
 
-	pac_add_sync_info($pac, $info_text, $info);
+	pac_add_sync_info($pac, join('', @info_text_lines), $info);
 }
 
 # JSON

@@ -17,7 +17,7 @@ my $less_def_cmd = "LESSHISTFILE=- $lessx -~ -S -Q --mouse";
 
 # my $yayx = exe_path('yay');
 my $progname = ($0 =~ m{(?:^|/)([^/]+?)(?:\.\w+)?$}s) ? $1 : die("Bad program name: $0\n");
-my $work_dir = "/tmp/$progname-$ENV{USER}";
+my $work_dir = "/tmp/$progname-$ENV{USER}-$$";
 my $sess_code = "$progname-$$";
 my $tumx_cmd = "$tmux_exe -L $sess_code";
 my $log_fname = "$work_dir/app.log"; # global log
@@ -138,7 +138,8 @@ my $tmux = {
 	pac0 => {name => '', info_text => '', info => {}}, # pseudo package, when the list is empty
 };
 
--d $work_dir || mkdir($work_dir) || die("Could not create work dir: $work_dir\n");
+system(exe_path('mkdir'), '-p', "$work_dir");
+#-d $work_dir || mkdir($work_dir) || die("Could not create work dir: $work_dir\n");
 
 for my $pan (@$tmux_pan_list) {
 	$pan->{file} = "$path_pfx.p.$pan->{code}";
@@ -169,6 +170,7 @@ END {
 	tmux_exit_cleanup($tmux //= {});
 	# generic cleanup
 	defined($shutdown_hooks) && do { while ($_ = pop(@$shutdown_hooks)) { $_->() } };
+	system("rm -rf $work_dir") if $work_dir =~ m/\Q-$$\E$/s;
 }
 
 # TMUX =============================
@@ -489,7 +491,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	$tmux->{comm}->("set window-status-current-format 'Loading package data ... '");
 
-	report(timest(Time::HiRes::time()) . " will load packages' metadata now");
+	report(iso_tstmp_now() . " will load packages' metadata now");
 
 	my $pac_list_exe = ($use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl") . ' | sort -k 2.1';
 	my ($pac_list_file, $pac_inst_file, $pac_sync_file, $pac_files_file) = ("$work_dir/db_pac_list", "$work_dir/db_pac_inst", "$work_dir/db_pac_sync", "$work_dir/db_pac_files");
@@ -502,7 +504,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 		wait
 	CMD
 
-	report(timest(Time::HiRes::time()) . " Dumped package metadata");
+	report(iso_tstmp_now() . " Dumped package metadata");
 
 	open(my $pach, '<', $pac_list_file) or die("Couldn't load package info\n $!");
 	while (<$pach>) {
@@ -522,7 +524,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 	}
 	close($pach);
 
-	report(timest(Time::HiRes::time()) . " loaded the -Sl list: ".scalar(@$pac_lst));
+	report(iso_tstmp_now() . " loaded the -Sl list: ".scalar(@$pac_lst));
 	#report("DATED stats: ".(join(' ', %$debug_stat)));
 
 	{ # INSTALLED package data
@@ -546,7 +548,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 			$loaded_recs++;
 			@$pac{qw/info info_text/} = ($pac_props, "--- Installed info ---\n" . $rec_text =~ s/\s*$/\n/sr);
 		}
-		report(timest(Time::HiRes::time()) . " loaded -Qi recs: $loaded_recs");
+		report(iso_tstmp_now() . " loaded -Qi recs: $loaded_recs");
 	}
 
 	{ # Load Sync DB
@@ -559,7 +561,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 			pac_add_sync_info($pac, $info_text, $pac_props);
 			$rec_cnt++;
 		}
-		report(timest(Time::HiRes::time()) . " loaded -Si recs: $rec_cnt");
+		report(iso_tstmp_now() . " loaded -Si recs: $rec_cnt");
 	}
 
 	# load file list per PAC
@@ -587,7 +589,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	unlink($pac_list_file, $pac_inst_file, $pac_sync_file, $pac_files_file);
 
-	report(timest(Time::HiRes::time()) . " loaded -Ql file list");
+	report(iso_tstmp_now() . " loaded -Ql file list");
 
 	$tmux->{comm}->("set window-status-current-format ''");
 	$app_menu_map->{REPOFILTER}->{list} = [sort map {$_->{name}} @$repo_lst];
@@ -1151,8 +1153,8 @@ sub write_file {
 	print $file_handle $contents;
 }
 
-sub timest {
-	my ($tm) = @_;
+sub iso_tstmp_now {
+	my $tm = Time::HiRes::time();
 	return POSIX::strftime("%H:%M:%S", localtime($tm)) . substr(sprintf('%.3f', $tm - int($tm)), 1, 4);
 }
 

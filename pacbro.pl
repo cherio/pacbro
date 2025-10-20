@@ -5,7 +5,6 @@
 
 use strict;
 use warnings;
-use Getopt::Long qw(:config no_auto_abbrev no_ignore_case);
 use Time::HiRes ();
 use POSIX ();
 
@@ -23,12 +22,12 @@ my $tumx_cmd = "$tmux_exe -L $sess_code";
 my $log_fname = "$work_dir/app.log"; # global log
 my $path_pfx = "$work_dir/$sess_code";
 
-Getopt::Long::GetOptions(
-	'aur' => \(my $use_aur),
-	'help|h' => \(my $show_help),
-);
+my %cmd_args = ();
+while (my $arg = shift(@ARGV)) {
+	if ($arg eq '-h' || $arg eq '--help') { $cmd_args{help} = 1; }
+	elsif ($arg eq '--aur') { $cmd_args{aur} = 1; }
+}
 
-# die("Install 'yay' to use AUR feature\n") if $use_aur && !$yayx;
 # TODO: new information report dialog - package full dependency tree
 
 my $shutdown_hooks = [];
@@ -48,7 +47,8 @@ for my $layout_item (@$layout_list) {
 my $pac_inst_states = [
 	{ code => 'E', label => 'Explicitly Installed', short => 'explicit' },
 	{ code => 'D', label => 'Installed as Dependency', short => 'as dep' }, # was 'I'
-	{ code => 'N', label => 'Not Installed', short => 'not inst' }
+	{ code => 'N', label => 'Not Installed', short => 'not inst' },
+	{ code => '*', label => 'All', short => '' }
 ];
 
 my $outdated_states = [
@@ -153,7 +153,7 @@ $ENV{FZF_DEFAULT_OPTS} = "--reverse --no-sort";
 # prepare key map
 my $tmux_key_map = {map {$_->{key} => $_} @$tmux_key_list};
 
-$show_help && do{ print(help()); exit(0); };
+$cmd_args{help} && do{ print(help()); exit(0); };
 tmux_start($tmux);
 
 while (my $msg = pacbro_next_input_cmd($tmux)) {
@@ -196,7 +196,7 @@ sub tmux_start {
 		my $binds = "--bind enter:'$sel_action' --bind double-click:'$sel_action'";
 		$binds .= " --bind left-click:'$sel_action'";
 		$binds .= " --bind focus:'execute-silent(echo PACFOCUS {} >> $cmd_in)'";
-		# $binds .= " --bind focus:'$sel_action'" if !$use_aur; # do not auto-load package info
+		# $binds .= " --bind focus:'$sel_action'" if !$cmd_args{aur}; # do not auto-load package info
 		$binds .= " --bind 'ctrl-alt-r:reload(cat $main_file)'";
 		$binds .= " --bind 'load:first'";
 		$binds .= " --bind 'start:unbind(ctrl-c,ctrl-g,ctrl-q,esc)'"; # do not allow exiting keys
@@ -402,7 +402,7 @@ sub package_sel {
 
 	if (!($_ = $tmux->{pac}) || $_->{name} ne $pac->{name}) { # if package is different
 		write_file("$tmux->{pans}->{info}->{file}", $pac->{info_text} // '');
-		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} q g");
+		$tmux->{comm}->("send-keys -t $tmux->{pans}->{info}->{id} g R");
 	}
 	$tmux->{pac} = $pac;
 	my $pac_det_lists = pac_deps_lists_get_or_load($pac, $tmux->{db}->{pac_map}); # { list_name => multiline_text }
@@ -493,7 +493,7 @@ sub pac_db_load_full { # load/pull full package list & package details map
 
 	report(iso_tstmp_now() . " will load packages' metadata now");
 
-	my $pac_list_exe = ($use_aur ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl") . ' | sort -k 2.1';
+	my $pac_list_exe = ($cmd_args{aur} ? "(curl -sL https://aur.archlinux.org/packages.gz | gunzip | sed -e 's/^/aur /'; pacman -Sl)" : "pacman -Sl") . ' | sort -k 2.1';
 	my ($pac_list_file, $pac_inst_file, $pac_sync_file, $pac_files_file) = ("$work_dir/db_pac_list", "$work_dir/db_pac_inst", "$work_dir/db_pac_sync", "$work_dir/db_pac_files");
 
 	system(<<~"CMD");
@@ -932,14 +932,16 @@ sub repo_filter {
 sub inst_filter {
 	my ($tmux, $menu, $item_list) = @_;
 	!@$item_list && return; # exited via Esc
-	$item_list = [] if scalar(@$item_list) == scalar(@$pac_inst_states); # ALL - no filter
+	$item_list = [] if scalar(@$item_list) >= (scalar(@$pac_inst_states) - 1); # ALL - no filter
 
 	my $code_by_lab = ($::{pac_inst_cd_by_lab} //= {map {$_->{label} => $_->{code}} @$pac_inst_states});
 	my $codes = join('', sort grep { $_ } map {$code_by_lab->{$_}} @$item_list);
+	($item_list, $codes) = ([], '') if index($codes, '*') > -1;
+	$menu->{chosen} = $item_list;
+
 	$codes eq ($tmux->{flt}->{inst} // '') && return; # not changed
 	$tmux->{flt}->{inst} = $codes;
 
-	$menu->{chosen} = $item_list;
 	pac_list_load($tmux);
 	tmux_status_bar_update($tmux);
 }
